@@ -67,6 +67,48 @@ def build_graph(topology: Topology) -> nx.DiGraph:
         G.add_edge(link.source, link.target, data=link)
     return G
 
+# --- Ring-Logik ---
+def initialize_rings():
+    """Sets the initial state for all defined rings (e.g., blocks RPL)."""
+    topology = app_state["topology"]
+    if not topology.rings:
+        return
+
+    for ring in topology.rings:
+        rpl_link = next((l for l in topology.links if l.id == ring.rpl_link_id), None)
+        if rpl_link:
+            rpl_link.status = 'blocking'
+            add_event(f"ERPS: Link '{rpl_link.id}' in Ring '{ring.id}' set to BLOCKING.")
+
+def handle_ring_failure(broken_link_id: str):
+    """Checks if a broken link is part of a ring and triggers failover."""
+    topology = app_state["topology"]
+    # Find the ring that contains the broken link
+    affected_ring = None
+    for r in topology.rings:
+        # A link is in the ring if both its source and target nodes are part of the ring's node list
+        link_nodes = set()
+        for l in topology.links:
+            if l.id == broken_link_id:
+                link_nodes.add(l.source)
+                link_nodes.add(l.target)
+                break
+        
+        if link_nodes.issubset(set(r.nodes)):
+            affected_ring = r
+            break
+
+    if not affected_ring or affected_ring.rpl_link_id == broken_link_id:
+        return None # No failover if the RPL itself fails or no ring is affected
+
+    # Failover Logic: Unblock the RPL
+    rpl_link = next((l for l in topology.links if l.id == affected_ring.rpl_link_id), None)
+    if rpl_link and rpl_link.status == 'blocking':
+        failover_command = UpdateLinkStatusCommand(topology, rpl_link.id, 'up')
+        add_event(f"ERPS: Failover in Ring '{affected_ring.id}'. Unblocking RPL '{rpl_link.id}'.")
+        return failover_command
+    return None
+
 # --- Data Loading and Initialization ---
 def load_and_validate_topology(filepath="topology.yml"):
     try:
@@ -106,7 +148,10 @@ def get_topology_stats():
         "links_total": len(links),
         "links_up": sum(1 for l in links if l.status == 'up'),
     }
-    stats["alarms"] = (stats["devices_total"] - stats["devices_online"]) + (stats["links_total"] - stats["links_up"])
+    # Alarms do not count 'blocking' links as down
+    links_with_issue = sum(1 for l in links if l.status not in ['up', 'blocking'])
+    devices_with_issue = stats["devices_total"] - stats["devices_online"]
+    stats["alarms"] = devices_with_issue + links_with_issue
     
     return jsonify(stats)
 
@@ -129,14 +174,27 @@ def update_link_status(link_id: str):
         abort(422, description=e.errors())
 
     topology = app_state["topology"]
-    if not any(link.id == link_id for link in topology.links):
+    target_link = next((link for link in topology.links if link.id == link_id), None)
+    if not target_link:
         abort(404, description=f"Link with ID '{link_id}' not found.")
 
-    command = UpdateLinkStatusCommand(topology, link_id, payload.status)
+    # The command for the original action
+    main_command = UpdateLinkStatusCommand(topology, link_id, payload.status)
+    
+    composite_command = CompositeCommand()
+    composite_command.add(main_command)
+    
+    # NEW: Check if a ring failover needs to be triggered
+    if payload.status in ['down', 'degraded']:
+        failover_cmd = handle_ring_failure(link_id)
+        if failover_cmd:
+            composite_command.add(failover_cmd)
+            
     try:
-        execute_command(command)
+        execute_command(composite_command)
         add_event(f"SIMULATION: Status of link '{link_id}' changed to '{payload.status}'.")
-        return jsonify(command._find_link().model_dump())
+        # Return the updated link object, as the original command might be part of a composite
+        return jsonify(target_link.model_dump())
     except ValueError as e:
         abort(500, description=str(e))
 
@@ -229,6 +287,8 @@ def load_snapshot():
     app_state["graph"] = build_graph(topology)
     app_state["events"] = snapshot_data.get("events", [])
     clear_history()
+    # After loading a snapshot, re-initialize the rings to their defined state
+    initialize_rings()
 
     add_event(f"SYSTEM: Snapshot '{snapshot_name}' loaded successfully.")
     return jsonify({"message": "Snapshot loaded."})
@@ -238,6 +298,7 @@ if __name__ == '__main__':
     topology = load_and_validate_topology()
     app_state["topology"] = topology
     app_state["graph"] = build_graph(topology)
-    add_event("SYSTEM: Backend started and topology/graph loaded.")
-    print("Starting UNOC backend server (v7 with HUD & CLI support)...")
+    initialize_rings() # NEU: Ring-Status initialisieren
+    add_event("SYSTEM: Backend started, topology/graph loaded, rings initialized.")
+    print("Starting UNOC backend server (v8 with ERPS Simulation)...")
     app.run(host='0.0.0.0', port=5000, debug=True)

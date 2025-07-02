@@ -1,5 +1,5 @@
 #
-# UNOC - topology.yml
+# UNOC - topology.yml (v2 mit Ring-Definition)
 #
 
 version: "1.0.0"
@@ -21,6 +21,16 @@ devices:
       ip_address: 10.0.0.2
       model: Cisco ASR 9000
       cpu_load: 25%
+  - id: AGG-COE-01
+    type: Aggregation Switch
+    status: online
+    properties:
+      name: Aggregation-Coesfeld-01
+  - id: AGG-RHE-01
+    type: Aggregation Switch
+    status: online
+    properties:
+      name: Aggregation-Rheine-01
   - id: SPLITTER-01
     type: Splitter
     status: online
@@ -68,3 +78,30 @@ links:
     properties:
       type: fiber
       length_km: 1.2
+  - id: link-mst-coe
+    source: AGG-MST-01
+    target: AGG-COE-01
+    status: up
+    properties:
+      type: fiber-10G
+  - id: link-coe-rhe
+    source: AGG-COE-01
+    target: AGG-RHE-01
+    status: up
+    properties:
+      type: fiber-10G
+  - id: link-rhe-mst
+    source: AGG-RHE-01
+    target: AGG-MST-01
+    status: up
+    properties:
+      type: fiber-10G
+
+rings:
+  - id: RING-MST-LAND
+    name: "Metro-Ring Münsterland"
+    nodes:
+      - AGG-MST-01
+      - AGG-COE-01
+      - AGG-RHE-01
+    rpl_link_id: link-rhe-mst

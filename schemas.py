@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Literal
 SUPPORTED_TOPOLOGY_VERSION = "1.0.0"
 
 DeviceStatus = Literal['online', 'offline', 'maintenance']
-LinkStatus = Literal['up', 'down', 'degraded']
+LinkStatus = Literal['up', 'down', 'degraded', 'blocking']  # NEU: 'blocking'
 
 class Device(BaseModel):
     id: str = Field(..., min_length=1)
@@ -19,10 +19,18 @@ class Link(BaseModel):
     status: LinkStatus
     properties: Dict[str, Any] = {}
 
+class Ring(BaseModel):  # NEU
+    """Defines an ERPS Ring."""
+    id: str
+    name: str
+    nodes: List[str]
+    rpl_link_id: str
+
 class Topology(BaseModel):
     version: str
     devices: List[Device]
     links: List[Link]
+    rings: List[Ring] = []  # NEU: Ring-Liste hinzufügen
 
 # --- API Payload Models ---
 

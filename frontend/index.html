@@ -176,6 +176,12 @@
             font-family: monospace;
             padding: 8px;
         }
+        
+        /* NEUE STILE FÜR RING-PANEL */
+        #ring-panel table { width: 100%; text-align: left; border-collapse: collapse; }
+        #ring-panel td { padding: 4px 2px; }
+        #ring-panel .status-blocking { color: #FFC107; font-weight: bold; }
+        #ring-panel .status-forwarding { color: var(--accent-green); font-weight: bold; }
     </style>
 </head>
 <body>
@@ -190,6 +196,12 @@
     <main>
         <div id="network-container"></div>
         <aside id="sidebar">
+            <!-- NEUES PANEL FÜR RINGE -->
+            <div id="ring-panel" class="panel">
+                <h2>Ring Status</h2>
+                <div id="ring-info" class="loader">Lade Ring-Status...</div>
+            </div>
+            
             <div id="properties-panel" class="panel">
                 <h2>Eigenschaften</h2>
                 <div id="properties-content" class="loader">Kein Element ausgewählt</div>
@@ -242,7 +254,9 @@
             maintenance: { border: "#FFC107", background: "#ffa000" },
             up: { color: "#4CAF50", highlight: "#66BB6A" },
             down: { color: "#F44336", highlight: "#EF5350" },
-            degraded: { color: "#FFC107", highlight: "#FFCA28" }
+            degraded: { color: "#FFC107", highlight: "#FFCA28" },
+            // NEU: Visualisierung für 'blocking'
+            blocking: { color: "#FFC107", highlight: "#FFCA28" }
         };
 
         function formatDeviceToNode(d) {
@@ -253,10 +267,36 @@
         }
 
         function formatLinkToEdge(l) {
-            return {
+            const edge = {
                 id: l.id, from: l.source, to: l.target,
-                color: statusToColor[l.status], arrows: 'to, from', data: l
+                color: statusToColor[l.status],
+                arrows: 'to, from',
+                data: l
             };
+            // Gestichelte Linie für blockierte Links
+            if (l.status === 'blocking') {
+                edge.dashes = [5, 5];
+            }
+            return edge;
+        }
+        
+        // NEUE Funktion, um Ring-Panel zu aktualisieren
+        function updateRingPanel(topology) {
+            const ringInfoDiv = document.getElementById('ring-info');
+            if (!topology.rings || topology.rings.length === 0) {
+                ringInfoDiv.innerHTML = '<span class="loader">Keine Ringe definiert.</span>';
+                return;
+            }
+            let html = '<table>';
+            topology.rings.forEach(ring => {
+                const rpl = topology.links.find(l => l.id === ring.rpl_link_id);
+                if (rpl) {
+                    const statusClass = rpl.status === 'blocking' ? 'status-blocking' : 'status-forwarding';
+                    html += `<tr><td><b>${ring.name}</b></td><td class="${statusClass}">${rpl.status.toUpperCase()}</td></tr>`;
+                }
+            });
+            html += '</table>';
+            ringInfoDiv.innerHTML = html;
         }
 
         async function initializeNetwork() {
@@ -269,6 +309,7 @@
                 edges.add(topology.links.map(formatLinkToEdge));
 
                 populateSplitterDropdown(topology.devices);
+                updateRingPanel(topology); // Ring-Panel initial befüllen
 
                 if (!network) {
                     const container = document.getElementById('network-container');
@@ -329,7 +370,9 @@
                 body: JSON.stringify(payload)
             });
             if (!res.ok) throw new Error((await res.json()).description || "Fehler");
-            await pollForUpdates(); await refreshTopologyDisplay();
+            // Warten auf das nächste Poll-Intervall ist oft ausreichend,
+            // aber für eine sofortige Reaktion rufen wir es direkt auf.
+            await pollForUpdates();
         }
 
         async function undoAction() { await postAction('/api/simulation/undo'); }
@@ -341,19 +384,36 @@
         }
 
         async function pollForUpdates() {
-            const res = await fetch(`${backendUrl}/api/events`);
-            const events = await res.json();
-            const eventLog = document.getElementById('event-log');
-            if (events[0] !== eventLog.children[0]?.textContent) {
-                eventLog.innerHTML = events.map(e => `<li>${e}</li>`).join('');
-                await refreshTopologyDisplay();
+            try {
+                // Events und History-Status parallel abfragen
+                const [eventsRes, historyRes, statsRes] = await Promise.all([
+                    fetch(`${backendUrl}/api/events`),
+                    fetch(`${backendUrl}/api/history/status`),
+                    fetch(`${backendUrl}/api/topology/stats`)
+                ]);
+                
+                const events = await eventsRes.json();
+                const historyStatus = await historyRes.json();
+                const stats = await statsRes.json();
+
+                // Event-Log nur bei Änderung aktualisieren
+                const eventLog = document.getElementById('event-log');
+                if (events[0] !== eventLog.children[0]?.textContent) {
+                    eventLog.innerHTML = events.map(e => `<li>${e}</li>`).join('');
+                    // Nur wenn sich Events geändert haben, hat sich wahrscheinlich auch die Topologie geändert
+                    await refreshTopologyDisplay();
+                }
+
+                // HUD und Buttons immer aktualisieren
+                updateHud(stats);
+                updateHistoryButtons(historyStatus);
+
+            } catch (error) {
+                console.error("Polling-Fehler:", error);
             }
-            updateHud(); updateHistoryButtons();
         }
 
-        async function updateHud() {
-            const res = await fetch(`${backendUrl}/api/topology/stats`);
-            const stats = await res.json();
+        function updateHud(stats) {
             document.getElementById('hud-devices').textContent = `${stats.devices_online} / ${stats.devices_total}`;
             document.getElementById('hud-links').textContent = `${stats.links_up} / ${stats.links_total}`;
             const alarms = document.getElementById('hud-alarms');
@@ -361,18 +421,20 @@
             alarms.style.color = stats.alarms > 0 ? 'var(--accent-red)' : 'var(--accent-green)';
         }
 
-        async function updateHistoryButtons() {
-            const res = await fetch(`${backendUrl}/api/history/status`);
-            const status = await res.json();
+        function updateHistoryButtons(status) {
             document.getElementById('undo-btn').disabled = !status.can_undo;
             document.getElementById('redo-btn').disabled = !status.can_redo;
         }
 
         async function refreshTopologyDisplay() {
-            const res = await fetch(`${backendUrl}/api/topology`);
-            const topology = await res.json();
-            nodes.update(topology.devices.map(formatDeviceToNode));
-            edges.update(topology.links.map(formatLinkToEdge));
+            try {
+                const res = await fetch(`${backendUrl}/api/topology`);
+                if (!res.ok) return;
+                const topology = await res.json();
+                nodes.update(topology.devices.map(formatDeviceToNode));
+                edges.update(topology.links.map(formatLinkToEdge));
+                updateRingPanel(topology); // NEU: Ring-Panel bei Refresh aufrufen
+            } catch (error) { console.error("Fehler bei Topologie-Aktualisierung:", error); }
         }
 
         async function saveSnapshot() {
@@ -390,13 +452,22 @@
         async function handleCliCommand(event) {
             if (event.key !== 'Enter') return;
             const input = event.target.value.trim();
+            if (!input) return;
             event.target.value = '';
-            const [command, arg] = input.split(' ');
-            if (command === "undo") return undoAction();
-            if (command === "redo") return redoAction();
-            if (command === "cut" || command === "fiber-cut") return postAction('/api/simulation/fiber-cut', { node_id: arg });
-            if (command.startsWith("link-")) return postAction(`/api/links/${arg}/status`, { status: command.split("-")[1] });
-            alert(`Unbekannter Befehl: ${command}`);
+            
+            const [command, ...args] = input.split(' ');
+            const arg = args.join(' ');
+
+            try {
+                if (command === "undo") return await undoAction();
+                if (command === "redo") return await redoAction();
+                if (command === "cut" || command === "fiber-cut") return await postAction('/api/simulation/fiber-cut', { node_id: arg });
+                if (command.startsWith("link-")) return await postAction(`/api/links/${arg}/status`, { status: command.split("-")[1] });
+                alert(`Unbekannter Befehl: ${command}`);
+            } catch (error) {
+                console.error("CLI Error:", error);
+                alert(error.message);
+            }
         }
 
         document.addEventListener('DOMContentLoaded', initializeNetwork);
