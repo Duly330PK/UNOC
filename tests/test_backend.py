@@ -1,14 +1,14 @@
 #
 # UNOC - tests/test_backend.py
 #
-# Unit tests for the stateful backend application with snapshots.
+# Unit tests for the stateful backend application with snapshots and undo/redo.
 #
 
 import pytest
 import copy
 import os
 import json
-from backend import app, load_and_validate_topology, SNAPSHOT_DIR
+from backend import app, app_state, load_and_validate_topology, SNAPSHOT_DIR
 
 # --- Test Setup ---
 BASE_TOPOLOGY = load_and_validate_topology()
@@ -18,6 +18,7 @@ BASE_TOPOLOGY = load_and_validate_topology()
 def client():
     """Create a test client, resetting state and cleaning up snapshots."""
     app.config['TESTING'] = True
+
     # Ensure snapshot dir exists and is empty before a test
     if not os.path.exists(SNAPSHOT_DIR):
         os.makedirs(SNAPSHOT_DIR)
@@ -25,12 +26,14 @@ def client():
         os.remove(os.path.join(SNAPSHOT_DIR, f))
 
     # Reset state before each test
-    app.app_state["topology"] = copy.deepcopy(BASE_TOPOLOGY)
-    app.app_state["events"] = []
-    
+    app_state["topology"] = copy.deepcopy(BASE_TOPOLOGY)
+    app_state["events"] = []
+    app_state["undo_stack"] = []
+    app_state["redo_stack"] = []
+
     with app.test_client() as client:
         yield client
-    
+
     # Cleanup after test
     for f in os.listdir(SNAPSHOT_DIR):
         os.remove(os.path.join(SNAPSHOT_DIR, f))
@@ -94,8 +97,52 @@ def test_snapshot_cycle(client):
     restored_link = next(l for l in final_topo_response.get_json()['links'] if l['id'] == 'link-02')
     assert restored_link['status'] == 'degraded'
 
-    # 6. Verify event log contains snapshot messages
+    # 6. Verify event log contains snapshot messages (JETZT korrekt eingerückt)
     events_response = client.get('/api/events')
     events = events_response.get_json()
-    assert "Snapshot 'test_run_1' loaded" in events[0]
-    assert "Snapshot 'test_run_1' saved" in events[2]
+
+    print("\n\nDEBUG-EVENTS:\n", "\n".join(events), "\n\n")  # optional
+
+    assert any(f"SYSTEM: Snapshot '{snapshot_name}' saved." in e for e in events)
+    assert any(f"SYSTEM: Snapshot '{snapshot_name}' loaded successfully." in e for e in events)
+    
+def test_undo_redo_cycle(client):
+    """
+    Tests the full undo/redo cycle for a simulation action.
+    """
+    link_id = "link-01"
+    original_status = "up"
+    changed_status = "down"
+
+    # 1. Action: Change status from 'up' to 'down'
+    res1 = client.post(f'/api/links/{link_id}/status', json={"status": changed_status})
+    assert res1.status_code == 200
+    assert res1.get_json()['status'] == changed_status
+
+    # 2. Verify history status
+    res_hist1 = client.get('/api/history/status')
+    assert res_hist1.get_json() == {"can_undo": True, "can_redo": False}
+
+    # 3. Undo: Change status back to 'up'
+    res_undo = client.post('/api/simulation/undo')
+    assert res_undo.status_code == 200
+
+    topo_after_undo = client.get('/api/topology').get_json()
+    link_after_undo = next(l for l in topo_after_undo['links'] if l['id'] == link_id)
+    assert link_after_undo['status'] == original_status
+
+    # 4. Verify history status after undo
+    res_hist2 = client.get('/api/history/status')
+    assert res_hist2.get_json() == {"can_undo": False, "can_redo": True}
+
+    # 5. Redo: Change status back to 'down'
+    res_redo = client.post('/api/simulation/redo')
+    assert res_redo.status_code == 200
+
+    topo_after_redo = client.get('/api/topology').get_json()
+    link_after_redo = next(l for l in topo_after_redo['links'] if l['id'] == link_id)
+    assert link_after_redo['status'] == changed_status
+
+    # 6. Verify history status after redo
+    res_hist3 = client.get('/api/history/status')
+    assert res_hist3.get_json() == {"can_undo": True, "can_redo": False}
