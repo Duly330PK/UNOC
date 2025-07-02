@@ -101,7 +101,7 @@
             padding: 15px;
             display: flex;
             flex-direction: column;
-            overflow: hidden;
+            overflow: hidden; 
         }
 
         #event-log-panel {
@@ -119,12 +119,22 @@
         #event-log { list-style: none; padding: 0; margin: 0; }
         #event-log li { padding: 4px 0; border-bottom: 1px solid #333; }
         #event-log li:first-child { color: var(--accent-color); }
+        
+        #cli-panel {
+            display: flex;
+            flex-direction: column;
+            overflow: visible; /* KORREKTUR: Erlaubt, dass die Suggestion-Box überläuft */
+        }
+
+        #cli-interaction-area {
+            position: relative; /* Anchor for suggestions */
+            margin-top: auto; /* Pushes this block to the bottom */
+        }
 
         #cli-input-wrapper {
             display: flex;
             align-items: center;
             border-bottom: 1px solid #333;
-            margin-bottom: 10px;
             padding-bottom: 5px;
         }
         #cli-prompt { font-family: monospace; padding-right: 8px; font-size: var(--font-size-large); color: var(--text-muted); }
@@ -140,6 +150,31 @@
             margin: 0;
         }
         #cli-input:focus { outline: none; }
+
+        #cli-suggestions {
+            position: absolute;
+            bottom: 100%; 
+            left: 0;
+            right: 0;
+            max-height: 150px;
+            overflow-y: auto;
+            background-color: #2c2c2c;
+            border: 1px solid #555;
+            border-bottom: none;
+            z-index: 1000;
+        }
+        
+        .suggestion-item {
+            padding: 8px 12px;
+            cursor: pointer;
+            color: #ddd;
+            font-family: monospace;
+        }
+        
+        .suggestion-item:hover, .suggestion-item.active {
+            background-color: #007BFF;
+            color: white;
+        }
 
         input, button, select {
             padding: 10px;
@@ -173,57 +208,25 @@
         
         .loader { color: var(--text-muted); font-style: italic; }
 
+        /* MODAL STYLES */
         #modal-overlay {
-            position: fixed;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
-            background-color: rgba(0, 0, 0, 0.7);
-            z-index: 1000;
-            display: flex;
-            justify-content: center;
-            align-items: center;
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(0, 0, 0, 0.7); z-index: 1000;
+            display: flex; justify-content: center; align-items: center;
         }
-        #modal-overlay.hidden {
-            display: none;
-        }
+        #modal-overlay.hidden { display: none; }
         #modal-box {
-            background-color: var(--panel-bg);
-            padding: 25px;
-            border-radius: 8px;
-            border: 1px solid var(--border-color);
-            width: 90%;
-            max-width: 500px;
+            background-color: var(--panel-bg); padding: 25px; border-radius: 8px;
+            border: 1px solid var(--border-color); width: 90%; max-width: 500px;
             box-shadow: 0 5px 15px rgba(0,0,0,0.5);
         }
-        #modal-box h2 {
-            margin-top: 0;
-            border-bottom: none;
-        }
-        #modal-message {
-            font-size: var(--font-size-normal);
-            line-height: 1.5;
-        }
-        #modal-buttons {
-            margin-top: 20px;
-            display: flex;
-            justify-content: flex-end;
-            gap: 10px;
-        }
-        #modal-buttons button {
-            margin-bottom: 0;
-        }
-        .modal-btn-primary {
-            background-color: var(--accent-color);
-            border-color: var(--accent-color);
-        }
-        .modal-btn-danger {
-            background-color: var(--accent-red);
-            border-color: var(--accent-red);
-        }
-        .modal-btn-secondary {
-            background-color: #555;
-            border-color: #666;
-        }
+        #modal-box h2 { margin-top: 0; border-bottom: none; }
+        #modal-message { font-size: var(--font-size-normal); line-height: 1.5; }
+        #modal-buttons { margin-top: 20px; display: flex; justify-content: flex-end; gap: 10px; }
+        #modal-buttons button { margin-bottom: 0; }
+        .modal-btn-primary { background-color: var(--accent-color); border-color: var(--accent-color); }
+        .modal-btn-danger { background-color: var(--accent-red); border-color: var(--accent-red); }
+        .modal-btn-secondary { background-color: #555; border-color: #666; }
     </style>
 </head>
 <body>
@@ -282,11 +285,14 @@
             </div>
             <div id="cli-panel" class="bottom-column">
                 <h2>Command Line</h2>
-                <div id="cli-input-wrapper">
-                    <span id="cli-prompt">UNOC></span>
-                    <input type="text" id="cli-input" placeholder="Befehl eingeben (z.B. 'help')...">
-                </div>
                 <div id="cli-output"></div>
+                <div id="cli-interaction-area">
+                    <div id="cli-suggestions"></div>
+                    <div id="cli-input-wrapper">
+                        <span id="cli-prompt">UNOC></span>
+                        <input type="text" id="cli-input" placeholder="Befehl eingeben (z.B. 'help')...">
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -299,20 +305,18 @@
         </div>
     </div>
 
-    <script type="text/javascript">
-        // --- Globale Variablen und visuelle Stile ---
+    <script>
+        // --- Globale Variablen ---
         const backendUrl = "http://127.0.0.1:5000";
         let network = null, map = null, nodes = new vis.DataSet([]), edges = new vis.DataSet([]);
         let mapMarkers = {}, mapLines = {}, currentView = 'topo', eventPollInterval = null;
 
+        // --- Visuelle Stile ---
         const statusToColor = {
-            online: { border: "#4CAF50", background: "#2e7d32" },
-            offline: { border: "#F44336", background: "#c62828" },
-            maintenance: { border: "#FFC107", background: "#ffa000" },
-            up: { color: "#4CAF50", highlight: "#66BB6A" },
-            down: { color: "#F44336", highlight: "#EF5350" },
-            degraded: { color: "#FFC107", highlight: "#FFCA28" },
-            blocking: { color: "#FFC107", highlight: "#FFCA28", dashes: [5, 5] }
+            online: { border: "#4CAF50", background: "#2e7d32" }, offline: { border: "#F44336", background: "#c62828" },
+            maintenance: { border: "#FFC107", background: "#ffa000" }, up: { color: "#4CAF50", highlight: "#66BB6A" },
+            down: { color: "#F44336", highlight: "#EF5350" }, degraded: { color: "#FFC107", highlight: "#FFCA28" },
+            blocking: { color: "#FFC107", highlight: "#FFCA28" }
         };
         const getEdgeLeafletColor = (status) => (statusToColor[status] || { color: '#9E9E9E' }).color;
 
@@ -415,6 +419,7 @@
             });
         }
         
+        // --- UI-Steuerung & Hilfsfunktionen ---
         function updateHud(stats) {
             document.getElementById('hud-devices').textContent = `${stats.devices_online} / ${stats.devices_total}`;
             document.getElementById('hud-links').textContent = `${stats.links_up} / ${stats.links_total}`;
@@ -456,29 +461,20 @@
             });
         }
 
-        function renderProperties(dataToShow) {
-            const contentDiv = document.getElementById('properties-content');
-            if (!dataToShow) {
-                contentDiv.innerHTML = '<span class="loader">Kein Element ausgewählt</span>';
+        function renderProperties(data) {
+            const content = document.getElementById('properties-content');
+            if (!data) {
+                content.innerHTML = '<span class="loader">Kein Element ausgewählt</span>';
                 return;
             }
             let table = '<table>';
-            const standardKeys = ['id', 'type', 'status', 'source', 'target', 'name', 'version'];
-            standardKeys.forEach(key => {
-                if (dataToShow[key]) {
-                    table += `<tr><th>${key.toUpperCase()}</th><td>${dataToShow[key]}</td></tr>`;
-                }
-            });
-            if (dataToShow.properties) {
-                for (const [key, value] of Object.entries(dataToShow.properties)) {
-                    let formattedValue = value;
-                    if (key.includes('percent')) formattedValue += ' %';
-                    if (key.includes('ms')) formattedValue += ' ms';
-                    table += `<tr><th>${key}</th><td>${formattedValue}</td></tr>`;
-                }
+            for (const [k, v] of Object.entries(data)) {
+                let displayValue = v;
+                if (k === 'coordinates' && Array.isArray(v)) displayValue = `${v[0].toFixed(4)}, ${v[1].toFixed(4)}`;
+                else if (typeof v === 'object' && v !== null) displayValue = JSON.stringify(v);
+                table += `<tr><th>${k}</th><td>${displayValue}</td></tr>`;
             }
-            table += '</table>';
-            contentDiv.innerHTML = table;
+            content.innerHTML = table + '</table>';
         }
         
         function toggleView() {
@@ -491,6 +487,7 @@
             if (isTopo) map.invalidateSize();
         }
 
+        // --- MODAL FUNCTIONS ---
         function showModal(title, message, buttons = [{ text: 'OK', class: 'modal-btn-primary', callback: hideModal }]) {
             document.getElementById('modal-title').textContent = title;
             document.getElementById('modal-message').textContent = message;
@@ -513,6 +510,7 @@
             document.getElementById('modal-overlay').classList.add('hidden');
         }
 
+        // --- Event Listeners ---
         function setupEventListeners() {
             network.on('click', params => {
                 const elementId = params.nodes[0] || params.edges[0];
@@ -526,9 +524,18 @@
             document.getElementById('fiber-cut-btn').addEventListener('click', simulateFiberCut);
             document.getElementById('save-snapshot-btn').addEventListener('click', saveSnapshot);
             document.getElementById('load-snapshot-btn').addEventListener('click', loadSnapshot);
-            document.getElementById('cli-input').addEventListener('keydown', handleCliCommand);
+            
+            // CLI Listeners
+            document.getElementById('cli-input').addEventListener('keydown', handleCliKeyDown);
+            document.getElementById('cli-input').addEventListener('keyup', debounce(handleAutocomplete, 250));
+            document.addEventListener('click', (e) => { // Hide suggestions if clicking outside
+                if (!document.getElementById('cli-interaction-area').contains(e.target)) {
+                    clearSuggestions();
+                }
+            });
         }
 
+        // --- Aktionen (POST-Requests) ---
         async function postAction(endpoint, payload = {}) {
             try {
                 const res = await fetch(`${backendUrl}${endpoint}`, {
@@ -546,46 +553,69 @@
         function simulateFiberCut() {
             const nodeId = document.getElementById('splitter-select').value;
             if (nodeId) {
-                showModal(
-                    'Faserschnitt simulieren',
-                    `Soll ein Faserschnitt bei ${nodeId} wirklich simuliert werden?`,
-                    [
-                        { text: 'Abbrechen', class: 'modal-btn-secondary' },
-                        { text: 'Simulieren', class: 'modal-btn-danger', callback: () => postAction('/api/simulation/fiber-cut', { node_id: nodeId }) }
-                    ]
+                showModal('Faserschnitt simulieren', `Soll ein Faserschnitt bei ${nodeId} wirklich simuliert werden?`,
+                    [{ text: 'Abbrechen', class: 'modal-btn-secondary' }, { text: 'Simulieren', class: 'modal-btn-danger', callback: () => postAction('/api/simulation/fiber-cut', { node_id: nodeId }) }]
                 );
             }
         }
 
         function saveSnapshot() {
             const name = document.getElementById('snapshot-name').value.trim();
-            if (name) {
-                 postAction('/api/snapshot/save', { name });
-            } else {
-                showModal('Fehler', 'Bitte einen Namen für den Snapshot eingeben.');
-            }
+            if (name) postAction('/api/snapshot/save', { name });
+            else showModal('Fehler', 'Bitte einen Namen für den Snapshot eingeben.');
         }
 
         function loadSnapshot() {
             const name = document.getElementById('snapshot-name').value.trim();
             if (name) {
-                showModal(
-                    'Snapshot laden',
-                    `Soll der Snapshot '${name}' wirklich geladen werden? Alle ungespeicherten Änderungen gehen verloren.`,
-                    [
-                        { text: 'Abbrechen', class: 'modal-btn-secondary' },
-                        { text: 'Laden', class: 'modal-btn-primary', callback: () => postAction('/api/snapshot/load', { name }) }
-                    ]
+                showModal('Snapshot laden', `Soll der Snapshot '${name}' wirklich geladen werden? Alle ungespeicherten Änderungen gehen verloren.`,
+                    [{ text: 'Abbrechen', class: 'modal-btn-secondary' }, { text: 'Laden', class: 'modal-btn-primary', callback: () => postAction('/api/snapshot/load', { name }) }]
                 );
-            } else {
-                 showModal('Fehler', 'Bitte den Namen des zu ladenden Snapshots eingeben.');
-            }
+            } else showModal('Fehler', 'Bitte den Namen des zu ladenden Snapshots eingeben.');
         }
 
-        function handleCliCommand(event) {
-            if (event.key !== 'Enter') return;
-            const input = event.target;
-            const commandStr = input.value.trim();
+        // --- CLI & Autocomplete Logic ---
+        const KNOWN_COMMANDS = ['help', 'undo', 'redo', 'cut', 'fiber-cut', 'link-down', 'link-up', 'link-degraded'];
+        
+        function debounce(func, delay) {
+            let timeout;
+            return function(...args) {
+                clearTimeout(timeout);
+                timeout = setTimeout(() => func.apply(this, args), delay);
+            };
+        }
+
+        function handleCliKeyDown(event) {
+            const suggestions = document.querySelectorAll('.suggestion-item');
+            let activeIndex = -1;
+            suggestions.forEach((s, i) => { if (s.classList.contains('active')) activeIndex = i; });
+
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                if (activeIndex > -1) {
+                    suggestions[activeIndex].click();
+                } else {
+                    handleCliCommand(event.target);
+                }
+            } else if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                if (activeIndex < suggestions.length - 1) {
+                    if (activeIndex > -1) suggestions[activeIndex].classList.remove('active');
+                    suggestions[activeIndex + 1].classList.add('active');
+                }
+            } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                if (activeIndex > 0) {
+                    suggestions[activeIndex].classList.remove('active');
+                    suggestions[activeIndex - 1].classList.add('active');
+                }
+            } else if (event.key === 'Escape') {
+                clearSuggestions();
+            }
+        }
+        
+        function handleCliCommand(inputElement) {
+            const commandStr = inputElement.value.trim();
             if (!commandStr) return;
             
             const cliOutput = document.getElementById('cli-output');
@@ -597,77 +627,90 @@
             if (command === "help") {
                 const helpText = `
                     <div style="color: var(--accent-color);">Verfügbare Befehle:</div>
-                    <div><strong>undo</strong> - Macht die letzte Aktion rückgängig.</div>
-                    <div><strong>redo</strong> - Wiederholt die letzte rückgängig gemachte Aktion.</div>
-                    <div><strong>cut &lt;node_id&gt;</strong> - Simuliert einen Faserschnitt am angegebenen Knoten.</div>
-                    <div><strong>link-down &lt;link_id&gt;</strong> - Setzt den Status eines Links auf 'down'.</div>
-                    <div><strong>link-up &lt;link_id&gt;</strong> - Setzt den Status eines Links auf 'up'.</div>
+                    ${KNOWN_COMMANDS.map(c => `<div><strong>${c}</strong></div>`).join('')}
                 `;
                 cliOutput.innerHTML += helpText;
-            } else if (command === "undo") {
-                postAction('/api/simulation/undo');
-            } else if (command === "redo") {
-                postAction('/api/simulation/redo');
-            } else if (command === "cut" || command === "fiber-cut") {
-                postAction('/api/simulation/fiber-cut', { node_id: arg });
-            } else if (command.startsWith("link-")) {
-                postAction(`/api/links/${arg}/status`, { status: command.split("-")[1] });
-            } else {
-                cliOutput.innerHTML += `<div style="color: var(--accent-red);">Unbekannter Befehl: '${command}'. Geben Sie 'help' ein für eine Liste der Befehle.</div>`;
-            }
+            } else if (command === "undo") postAction('/api/simulation/undo');
+            else if (command === "redo") postAction('/api/simulation/redo');
+            else if (command === "cut" || command === "fiber-cut") postAction('/api/simulation/fiber-cut', { node_id: arg });
+            else if (command.startsWith("link-")) postAction(`/api/links/${arg}/status`, { status: command.split("-")[1] });
+            else cliOutput.innerHTML += `<div style="color: var(--accent-red);">Unbekannter Befehl: '${command}'. Geben Sie 'help' ein für eine Liste der Befehle.</div>`;
             
             cliOutput.scrollTop = cliOutput.scrollHeight;
-            input.value = '';
+            inputElement.value = '';
+            clearSuggestions();
         }
 
-        // --- Formatierungsfunktionen für Graph ---
-        const formatDeviceToNode = d => ({
-            id: d.id,
-            label: `${d.type}\n(${d.id})`,
-            shape: 'box',
-            color: statusToColor[d.status],
-            font: { color: '#ffffff' },
-            data: d
-        });
-
-        function formatLinkToEdge(l) {
-            const utilization = l.properties?.utilization_percent;
-            let edgeColor = statusToColor[l.status] || { color: '#9E9E9E' };
-            let edgeWidth = 2;
-            if (l.status === 'up' && utilization !== undefined) {
-                if (utilization >= 80) {
-                    edgeColor = { color: statusToColor.down.color, highlight: statusToColor.down.highlight };
-                    edgeWidth = 4;
-                } else if (utilization >= 50) {
-                    edgeColor = { color: statusToColor.blocking.color, highlight: statusToColor.blocking.highlight };
-                    edgeWidth = 3;
+        function handleAutocomplete(event) {
+            const inputElement = event.target;
+            const text = inputElement.value;
+            const parts = text.trim().split(' ');
+            
+            if (['Enter', 'Escape', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
+                if(event.key !== 'ArrowUp' && event.key !== 'ArrowDown') clearSuggestions();
+                return;
+            }
+            
+            if (parts.length === 1 && !text.endsWith(' ')) {
+                const partialCommand = parts[0];
+                if(partialCommand === '') {
+                    clearSuggestions();
+                    return;
                 }
+                const suggestions = KNOWN_COMMANDS.filter(c => c.startsWith(partialCommand));
+                renderSuggestions(suggestions, '');
+            } else if (parts.length >= 1 && text.endsWith(' ')) {
+                 const command = parts[0];
+                 let suggestions = [];
+                 const commandsWithLinkIds = ['link-down', 'link-up', 'link-degraded'];
+                 const commandsWithNodeIds = ['cut', 'fiber-cut'];
+                 if (commandsWithLinkIds.includes(command)) {
+                    suggestions = edges.get().map(item => item.id);
+                 } else if (commandsWithNodeIds.includes(command)) {
+                    suggestions = nodes.get().map(item => item.id);
+                 }
+                 renderSuggestions(suggestions, command);
+            } else if (parts.length >= 2) {
+                const command = parts[0];
+                const partialId = parts[parts.length - 1];
+                let suggestions = [];
+                const commandsWithLinkIds = ['link-down', 'link-up', 'link-degraded'];
+                const commandsWithNodeIds = ['cut', 'fiber-cut'];
+
+                if (commandsWithLinkIds.includes(command)) {
+                    suggestions = edges.get({ filter: item => item.id.toLowerCase().startsWith(partialId.toLowerCase()) }).map(item => item.id);
+                } else if (commandsWithNodeIds.includes(command)) {
+                    suggestions = nodes.get({ filter: item => item.id.toLowerCase().startsWith(partialId.toLowerCase()) }).map(item => item.id);
+                }
+                renderSuggestions(suggestions, command);
+            } else {
+                clearSuggestions();
             }
-            if (l.status === 'blocking') {
-                edgeColor = statusToColor.blocking;
-            }
-            const edge = {
-                id: l.id,
-                from: l.source,
-                to: l.target,
-                color: edgeColor,
-                width: edgeWidth,
-                font: {
-                    color: '#aaa',
-                    size: 11,
-                    align: 'top',
-                    strokeWidth: 3,
-                    strokeColor: '#1a1a1a'
-                },
-                label: l.id,
-                arrows: 'to, from',
-                data: l
-            };
-            if (l.status === 'blocking') {
-                edge.dashes = statusToColor.blocking.dashes;
-            }
-            return edge;
         }
+
+        function renderSuggestions(suggestions, baseCommand) {
+            const container = document.getElementById('cli-suggestions');
+            if (suggestions.length === 0) {
+                clearSuggestions();
+                return;
+            }
+            container.innerHTML = suggestions.map(s => `<div class="suggestion-item" onclick="selectSuggestion('${baseCommand}', '${s}')">${s}</div>`).join('');
+        }
+
+        function selectSuggestion(baseCommand, id) {
+            const inputElement = document.getElementById('cli-input');
+            inputElement.value = `${baseCommand} ${id}`.trim() + ' ';
+            clearSuggestions();
+            inputElement.focus();
+        }
+        
+        function clearSuggestions() {
+            document.getElementById('cli-suggestions').innerHTML = '';
+        }
+
+        // --- Hilfsfunktionen ---
+        const formatDeviceToNode = d => ({id: d.id, label: `${d.type}\n(${d.id})`, shape: 'box', color: statusToColor[d.status], font: { color: '#ffffff' }, data: d});
+        const formatLinkToEdge = l => ({id: l.id, from: l.source, to: l.target, color: statusToColor[l.status], arrows: 'to, from', dashes: l.status === 'blocking' ? [5, 5] : false, data: l, label: l.id, font: { color: '#aaa', size: 11, align: 'top', strokeWidth: 3, strokeColor: '#1a1a1a' }});
 
         document.addEventListener('DOMContentLoaded', initialize);
     </script>
