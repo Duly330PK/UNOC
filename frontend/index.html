@@ -173,7 +173,6 @@
         
         .loader { color: var(--text-muted); font-style: italic; }
 
-        /* MODAL STYLES */
         #modal-overlay {
             position: fixed;
             top: 0; left: 0;
@@ -292,7 +291,6 @@
         </div>
     </div>
 
-    <!-- Modal Structure -->
     <div id="modal-overlay" class="hidden">
         <div id="modal-box">
             <h2 id="modal-title"></h2>
@@ -301,18 +299,20 @@
         </div>
     </div>
 
-    <script>
-        // --- Globale Variablen ---
+    <script type="text/javascript">
+        // --- Globale Variablen und visuelle Stile ---
         const backendUrl = "http://127.0.0.1:5000";
         let network = null, map = null, nodes = new vis.DataSet([]), edges = new vis.DataSet([]);
         let mapMarkers = {}, mapLines = {}, currentView = 'topo', eventPollInterval = null;
 
-        // --- Visuelle Stile ---
         const statusToColor = {
-            online: { border: "#4CAF50", background: "#2e7d32" }, offline: { border: "#F44336", background: "#c62828" },
-            maintenance: { border: "#FFC107", background: "#ffa000" }, up: { color: "#4CAF50", highlight: "#66BB6A" },
-            down: { color: "#F44336", highlight: "#EF5350" }, degraded: { color: "#FFC107", highlight: "#FFCA28" },
-            blocking: { color: "#FFC107", highlight: "#FFCA28" }
+            online: { border: "#4CAF50", background: "#2e7d32" },
+            offline: { border: "#F44336", background: "#c62828" },
+            maintenance: { border: "#FFC107", background: "#ffa000" },
+            up: { color: "#4CAF50", highlight: "#66BB6A" },
+            down: { color: "#F44336", highlight: "#EF5350" },
+            degraded: { color: "#FFC107", highlight: "#FFCA28" },
+            blocking: { color: "#FFC107", highlight: "#FFCA28", dashes: [5, 5] }
         };
         const getEdgeLeafletColor = (status) => (statusToColor[status] || { color: '#9E9E9E' }).color;
 
@@ -415,7 +415,6 @@
             });
         }
         
-        // --- UI-Steuerung & Hilfsfunktionen ---
         function updateHud(stats) {
             document.getElementById('hud-devices').textContent = `${stats.devices_online} / ${stats.devices_total}`;
             document.getElementById('hud-links').textContent = `${stats.links_up} / ${stats.links_total}`;
@@ -457,20 +456,29 @@
             });
         }
 
-        function renderProperties(data) {
-            const content = document.getElementById('properties-content');
-            if (!data) {
-                content.innerHTML = '<span class="loader">Kein Element ausgewählt</span>';
+        function renderProperties(dataToShow) {
+            const contentDiv = document.getElementById('properties-content');
+            if (!dataToShow) {
+                contentDiv.innerHTML = '<span class="loader">Kein Element ausgewählt</span>';
                 return;
             }
             let table = '<table>';
-            for (const [k, v] of Object.entries(data)) {
-                let displayValue = v;
-                if (k === 'coordinates' && Array.isArray(v)) displayValue = `${v[0].toFixed(4)}, ${v[1].toFixed(4)}`;
-                else if (typeof v === 'object' && v !== null) displayValue = JSON.stringify(v);
-                table += `<tr><th>${k}</th><td>${displayValue}</td></tr>`;
+            const standardKeys = ['id', 'type', 'status', 'source', 'target', 'name', 'version'];
+            standardKeys.forEach(key => {
+                if (dataToShow[key]) {
+                    table += `<tr><th>${key.toUpperCase()}</th><td>${dataToShow[key]}</td></tr>`;
+                }
+            });
+            if (dataToShow.properties) {
+                for (const [key, value] of Object.entries(dataToShow.properties)) {
+                    let formattedValue = value;
+                    if (key.includes('percent')) formattedValue += ' %';
+                    if (key.includes('ms')) formattedValue += ' ms';
+                    table += `<tr><th>${key}</th><td>${formattedValue}</td></tr>`;
+                }
             }
-            content.innerHTML = table + '</table>';
+            table += '</table>';
+            contentDiv.innerHTML = table;
         }
         
         function toggleView() {
@@ -483,7 +491,6 @@
             if (isTopo) map.invalidateSize();
         }
 
-        // --- MODAL FUNCTIONS ---
         function showModal(title, message, buttons = [{ text: 'OK', class: 'modal-btn-primary', callback: hideModal }]) {
             document.getElementById('modal-title').textContent = title;
             document.getElementById('modal-message').textContent = message;
@@ -522,7 +529,6 @@
             document.getElementById('cli-input').addEventListener('keydown', handleCliCommand);
         }
 
-        // --- Aktionen (POST-Requests) ---
         async function postAction(endpoint, payload = {}) {
             try {
                 const res = await fetch(`${backendUrl}${endpoint}`, {
@@ -614,27 +620,53 @@
             input.value = '';
         }
 
-        // --- Hilfsfunktionen ---
-        const formatDeviceToNode = d => ({id: d.id, label: `${d.type}\n(${d.id})`, shape: 'box', color: statusToColor[d.status], font: { color: '#ffffff' }, data: d});
-        
+        // --- Formatierungsfunktionen für Graph ---
+        const formatDeviceToNode = d => ({
+            id: d.id,
+            label: `${d.type}\n(${d.id})`,
+            shape: 'box',
+            color: statusToColor[d.status],
+            font: { color: '#ffffff' },
+            data: d
+        });
+
         function formatLinkToEdge(l) {
-            return {
+            const utilization = l.properties?.utilization_percent;
+            let edgeColor = statusToColor[l.status] || { color: '#9E9E9E' };
+            let edgeWidth = 2;
+            if (l.status === 'up' && utilization !== undefined) {
+                if (utilization >= 80) {
+                    edgeColor = { color: statusToColor.down.color, highlight: statusToColor.down.highlight };
+                    edgeWidth = 4;
+                } else if (utilization >= 50) {
+                    edgeColor = { color: statusToColor.blocking.color, highlight: statusToColor.blocking.highlight };
+                    edgeWidth = 3;
+                }
+            }
+            if (l.status === 'blocking') {
+                edgeColor = statusToColor.blocking;
+            }
+            const edge = {
                 id: l.id,
                 from: l.source,
                 to: l.target,
-                color: statusToColor[l.status],
-                arrows: 'to, from',
-                dashes: l.status === 'blocking' ? [5, 5] : false,
-                data: l,
-                label: l.id, // Display the link ID as a label
+                color: edgeColor,
+                width: edgeWidth,
                 font: {
-                    color: '#aaa', // Muted color for the label
+                    color: '#aaa',
                     size: 11,
                     align: 'top',
                     strokeWidth: 3,
-                    strokeColor: '#1a1a1a' // Background color for better readability
-                }
+                    strokeColor: '#1a1a1a'
+                },
+                label: l.id,
+                arrows: 'to, from',
+                data: l
             };
+            if (l.status === 'blocking') {
+                edge.dashes = statusToColor.blocking.dashes;
+            }
+            return edge;
         }
 
         document.addEventListener('DOMContentLoaded', initialize);

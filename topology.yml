@@ -1,7 +1,6 @@
 #
-# UNOC - topology.yml (v2 mit Ring-Definition und Koordinaten)
+# UNOC - topology.yml (v3 mit Link-Metriken)
 #
-
 version: "1.0.0"
 
 devices:
@@ -9,7 +8,7 @@ devices:
     type: OLT
     status: online
     properties: { "name": "OLT-Muenster-01" }
-    coordinates: [51.960, 7.625] # Längengrad, Breitengrad für Münster
+    coordinates: [51.960, 7.625]
   - id: AGG-MST-01
     type: Aggregation Switch
     status: online
@@ -19,29 +18,24 @@ devices:
     type: Aggregation Switch
     status: online
     properties: { "name": "Aggregation-Coesfeld-01" }
-    coordinates: [51.945, 7.165] # Coesfeld
+    coordinates: [51.945, 7.165]
   - id: AGG-RHE-01
     type: Aggregation Switch
     status: online
     properties: { "name": "Aggregation-Rheine-01" }
-    coordinates: [52.280, 7.435] # Rheine
+    coordinates: [52.280, 7.435]
   - id: SPLITTER-01
     type: Splitter
     status: online
-    properties:
-      ratio: "1:16"
+    properties: { ratio: "1:16" }
   - id: ONT-KUNDE-123
     type: ONT
     status: online
-    properties:
-      customer_id: 4711
-      vlan: 101
+    properties: { customer_id: 4711, vlan: 101 }
   - id: ONT-KUNDE-124
     type: ONT
     status: offline
-    properties:
-      customer_id: 4712
-      vlan: 102
+    properties: { customer_id: 4712, vlan: 102 }
 
 links:
   - id: link-01
@@ -50,7 +44,9 @@ links:
     status: up
     properties:
       type: fiber-10G
-      utilization: "34%"
+      utilization_percent: 65.0     # Mittlere Auslastung
+      latency_ms: 0.5
+      jitter_ms: 0.1
   - id: link-02
     source: OLT-MST-01
     target: SPLITTER-01
@@ -58,6 +54,7 @@ links:
     properties:
       type: fiber
       length_km: 2.5
+      utilization_percent: 30.0     # Niedrige Auslastung
   - id: link-03
     source: SPLITTER-01
     target: ONT-KUNDE-123
@@ -78,24 +75,30 @@ links:
     status: up
     properties:
       type: fiber-10G
+      utilization_percent: 85.0     # Hohe Auslastung -> wird rot!
+      latency_ms: 1.8
+      jitter_ms: 0.9
   - id: link-coe-rhe
     source: AGG-COE-01
     target: AGG-RHE-01
     status: up
     properties:
       type: fiber-10G
+      utilization_percent: 40.0     # Niedrige Auslastung
+      latency_ms: 2.1
+      jitter_ms: 0.2
   - id: link-rhe-mst
     source: AGG-RHE-01
     target: AGG-MST-01
     status: up
     properties:
       type: fiber-10G
+      utilization_percent: 5.0      # Sehr niedrig, da RPL
+      latency_ms: 3.5
+      jitter_ms: 0.1
 
 rings:
   - id: RING-MST-LAND
     name: "Metro-Ring Münsterland"
-    nodes:
-      - AGG-MST-01
-      - AGG-COE-01
-      - AGG-RHE-01
-    rpl_link_id: link-rhe-mst
+    nodes: ["AGG-MST-01", "AGG-COE-01", "AGG-RHE-01"]
+    rpl_link_id: "link-rhe-mst"
