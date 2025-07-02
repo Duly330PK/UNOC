@@ -1,57 +1,83 @@
 import yaml
-from flask import Flask, jsonify, abort
+import sys
+import datetime
+from flask import Flask, jsonify, abort, request
 from flask_cors import CORS
 from pydantic import ValidationError
 
-from schemas import Topology, SUPPORTED_TOPOLOGY_VERSION
+from schemas import Topology, UpdateLinkStatusPayload, SUPPORTED_TOPOLOGY_VERSION
 
 app = Flask(__name__)
 CORS(app)
+
+app_state = {
+    "topology": None,
+    "events": []
+}
+
+def add_event(message: str):
+    timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    app_state["events"].insert(0, f"[{timestamp}] {message}")
+    app_state["events"] = app_state["events"][:100]
 
 def load_and_validate_topology(filepath="topology.yml"):
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             data = yaml.safe_load(f)
     except FileNotFoundError:
-        raise
+        print(f"FATAL: Topology file not found at '{filepath}'. Exiting.", file=sys.stderr)
+        sys.exit(1)
 
     try:
         topology = Topology.model_validate(data)
-    except ValidationError as e:
-        raise
+        if topology.version != SUPPORTED_TOPOLOGY_VERSION:
+            raise ValueError(f"Unsupported topology version '{topology.version}'. Backend requires '{SUPPORTED_TOPOLOGY_VERSION}'.")
 
-    if topology.version != SUPPORTED_TOPOLOGY_VERSION:
-        raise ValidationError.from_exception_data(
-            title="Unsupported Topology Version",
-            line_errors=[{
-                "loc": ("version",),
-                "msg": f"Version '{topology.version}' is not supported.",
-                "type": "value_error"
-            }]
-        )
+        device_ids = {device.id for device in topology.devices}
+        for link in topology.links:
+            if link.source not in device_ids:
+                raise ValueError(f"Link '{link.id}' references a non-existent source '{link.source}'.")
+            if link.target not in device_ids:
+                raise ValueError(f"Link '{link.id}' references a non-existent target '{link.target}'.")
 
-    device_ids = {device.id for device in topology.devices}
-    for link in topology.links:
-        if link.source not in device_ids:
-            raise ValueError(f"Link '{link.id}' source '{link.source}' unknown.")
-        if link.target not in device_ids:
-            raise ValueError(f"Link '{link.id}' target '{link.target}' unknown.")
-
-    return topology
+        return topology
+    except (ValidationError, ValueError) as e:
+        print(f"FATAL: Invalid data in '{filepath}': {e}", file=sys.stderr)
+        sys.exit(1)
 
 @app.route('/api/topology', methods=['GET'])
 def get_topology():
+    if app_state["topology"]:
+        return jsonify(app_state["topology"].model_dump())
+    abort(500, description="Topology has not been initialized.")
+
+@app.route('/api/events', methods=['GET'])
+def get_events():
+    return jsonify(app_state["events"])
+
+@app.route('/api/links/<string:link_id>/status', methods=['POST'])
+def update_link_status(link_id: str):
     try:
-        topology_model = load_and_validate_topology()
-        return jsonify(topology_model.model_dump())
-    except FileNotFoundError:
-        abort(404, description="topology.yml not found.")
+        payload = UpdateLinkStatusPayload.model_validate(request.get_json())
     except ValidationError as e:
         abort(422, description=e.errors())
-    except ValueError as e:
-        abort(422, description=str(e))
+
+    topology = app_state["topology"]
+    target_link = next((link for link in topology.links if link.id == link_id), None)
+
+    if not target_link:
+        abort(404, description=f"Link with ID '{link_id}' not found.")
+
+    old_status = target_link.status
+    target_link.status = payload.status
+    add_event(f"SIMULATION: Status of link '{link_id}' changed from '{old_status}' to '{payload.status}'.")
+
+    return jsonify(target_link.model_dump())
 
 if __name__ == '__main__':
-    print("UNOC Backend gestartet.")
-    print("API verfügbar unter http://127.0.0.1:5000/api/topology")
+    app_state["topology"] = load_and_validate_topology()
+    add_event("SYSTEM: Backend started and topology loaded successfully.")
+    print("Starting UNOC backend server (v3 with State & Simulation)...")
+    print(f"Required topology version: {SUPPORTED_TOPOLOGY_VERSION}")
+    print("Access the API at http://127.0.0.1:5000/api/topology")
     app.run(host='0.0.0.0', port=5000, debug=True)
