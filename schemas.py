@@ -1,16 +1,17 @@
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Literal
+from typing import List, Dict, Any, Literal, Optional, Tuple
 
 SUPPORTED_TOPOLOGY_VERSION = "1.0.0"
 
 DeviceStatus = Literal['online', 'offline', 'maintenance']
-LinkStatus = Literal['up', 'down', 'degraded', 'blocking']  # NEU: 'blocking'
+LinkStatus = Literal['up', 'down', 'degraded', 'blocking']
 
 class Device(BaseModel):
     id: str = Field(..., min_length=1)
     type: str = Field(..., min_length=1)
     status: DeviceStatus
     properties: Dict[str, Any] = {}
+    coordinates: Optional[Tuple[float, float]] = None # NEU: [lat, lon]
 
 class Link(BaseModel):
     id: str = Field(..., min_length=1)
@@ -19,7 +20,7 @@ class Link(BaseModel):
     status: LinkStatus
     properties: Dict[str, Any] = {}
 
-class Ring(BaseModel):  # NEU
+class Ring(BaseModel):
     """Defines an ERPS Ring."""
     id: str
     name: str
@@ -30,7 +31,7 @@ class Topology(BaseModel):
     version: str
     devices: List[Device]
     links: List[Link]
-    rings: List[Ring] = []  # NEU: Ring-Liste hinzufügen
+    rings: List[Ring] = []
 
 # --- API Payload Models ---
 

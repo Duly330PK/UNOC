@@ -1,5 +1,5 @@
 #
-# UNOC - topology.yml (v2 mit Ring-Definition)
+# UNOC - topology.yml (v2 mit Ring-Definition und Koordinaten)
 #
 
 version: "1.0.0"
@@ -8,29 +8,23 @@ devices:
   - id: OLT-MST-01
     type: OLT
     status: online
-    properties:
-      name: OLT-Muenster-01
-      ip_address: 10.0.0.1
-      model: Nokia FX-8
-      cpu_load: 15%
+    properties: { "name": "OLT-Muenster-01" }
+    coordinates: [51.960, 7.625] # Längengrad, Breitengrad für Münster
   - id: AGG-MST-01
     type: Aggregation Switch
     status: online
-    properties:
-      name: Aggregation-Muenster-01
-      ip_address: 10.0.0.2
-      model: Cisco ASR 9000
-      cpu_load: 25%
+    properties: { "name": "Aggregation-Muenster-01" }
+    coordinates: [51.962, 7.628]
   - id: AGG-COE-01
     type: Aggregation Switch
     status: online
-    properties:
-      name: Aggregation-Coesfeld-01
+    properties: { "name": "Aggregation-Coesfeld-01" }
+    coordinates: [51.945, 7.165] # Coesfeld
   - id: AGG-RHE-01
     type: Aggregation Switch
     status: online
-    properties:
-      name: Aggregation-Rheine-01
+    properties: { "name": "Aggregation-Rheine-01" }
+    coordinates: [52.280, 7.435] # Rheine
   - id: SPLITTER-01
     type: Splitter
     status: online
