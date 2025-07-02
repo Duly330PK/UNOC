@@ -25,3 +25,12 @@ This project is a simulation and visualization tool for Metro-Ethernet and GPON 
 
 Example JSON payload:
 { "status": "down" }
+
+
+## Snapshots
+You can save and restore full application state via API:
+
+```bash
+curl -X POST -H "Content-Type: application/json" -d '{"name": "test1"}' http://127.0.0.1:5000/api/snapshot/save
+curl -X POST -H "Content-Type: application/json" -d '{"name": "test1"}' http://127.0.0.1:5000/api/snapshot/load
+```

@@ -1,6 +1,8 @@
 import yaml
 import sys
 import datetime
+import os
+import json
 from flask import Flask, jsonify, abort, request
 from flask_cors import CORS
 from pydantic import ValidationError
@@ -10,6 +12,7 @@ from schemas import Topology, UpdateLinkStatusPayload, SUPPORTED_TOPOLOGY_VERSIO
 app = Flask(__name__)
 CORS(app)
 
+# Globaler Applikationszustand
 app_state = {
     "topology": None,
     "events": []
@@ -73,6 +76,41 @@ def update_link_status(link_id: str):
     add_event(f"SIMULATION: Status of link '{link_id}' changed from '{old_status}' to '{payload.status}'.")
 
     return jsonify(target_link.model_dump())
+
+@app.route('/api/snapshot/save', methods=['POST'])
+def save_snapshot():
+    snapshot_name = request.json.get("name", "snapshot")
+    snapshot_path = os.path.join("snapshots", f"{snapshot_name}.json")
+
+    serializable_state = {
+        "topology": app_state["topology"].model_dump() if app_state["topology"] else None,
+        "events": app_state["events"]
+    }
+
+    os.makedirs("snapshots", exist_ok=True)
+    with open(snapshot_path, "w", encoding="utf-8") as f:
+        json.dump(serializable_state, f, indent=2)
+
+    add_event(f"Snapshot '{snapshot_name}' saved.")
+    return jsonify({"message": f"Snapshot '{snapshot_name}' saved."})
+
+@app.route('/api/snapshot/load', methods=['POST'])
+def load_snapshot():
+    snapshot_name = request.json.get("name", "snapshot")
+    snapshot_path = os.path.join("snapshots", f"{snapshot_name}.json")
+    if not os.path.exists(snapshot_path):
+        return jsonify({"error": "Snapshot not found."}), 404
+
+    with open(snapshot_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    try:
+        app_state["topology"] = Topology.model_validate(data["topology"]) if data["topology"] else None
+        app_state["events"] = data.get("events", [])
+        add_event(f"Snapshot '{snapshot_name}' loaded.")
+        return jsonify({"message": f"Snapshot '{snapshot_name}' loaded."})
+    except ValidationError as e:
+        return jsonify({"error": f"Snapshot load failed: {str(e)}"}), 400
 
 if __name__ == '__main__':
     app_state["topology"] = load_and_validate_topology()

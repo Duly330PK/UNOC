@@ -49,3 +49,12 @@ def test_get_events_initial(client):
     response = client.get('/api/events')
     assert response.status_code == 200
     assert response.get_json() == []
+
+
+def test_snapshot_cycle(client):
+    # Save snapshot
+    response = client.post('/api/snapshot/save', json={'name': 'pytest'})
+    assert response.status_code == 200
+    # Load snapshot
+    response = client.post('/api/snapshot/load', json={'name': 'pytest'})
+    assert response.status_code == 200

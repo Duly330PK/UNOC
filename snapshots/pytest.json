@@ -1,0 +1,98 @@
+{
+  "topology": {
+    "version": "1.0.0",
+    "devices": [
+      {
+        "id": "OLT-MST-01",
+        "type": "OLT",
+        "status": "online",
+        "properties": {
+          "name": "OLT-Muenster-01",
+          "ip_address": "10.0.0.1",
+          "model": "Nokia FX-8",
+          "cpu_load": "15%"
+        }
+      },
+      {
+        "id": "AGG-MST-01",
+        "type": "Aggregation Switch",
+        "status": "online",
+        "properties": {
+          "name": "Aggregation-Muenster-01",
+          "ip_address": "10.0.0.2",
+          "model": "Cisco ASR 9000",
+          "cpu_load": "25%"
+        }
+      },
+      {
+        "id": "SPLITTER-01",
+        "type": "Splitter",
+        "status": "online",
+        "properties": {
+          "ratio": "1:16"
+        }
+      },
+      {
+        "id": "ONT-KUNDE-123",
+        "type": "ONT",
+        "status": "online",
+        "properties": {
+          "customer_id": 4711,
+          "vlan": 101
+        }
+      },
+      {
+        "id": "ONT-KUNDE-124",
+        "type": "ONT",
+        "status": "offline",
+        "properties": {
+          "customer_id": 4712,
+          "vlan": 102
+        }
+      }
+    ],
+    "links": [
+      {
+        "id": "link-01",
+        "source": "AGG-MST-01",
+        "target": "OLT-MST-01",
+        "status": "up",
+        "properties": {
+          "type": "fiber-10G",
+          "utilization": "34%"
+        }
+      },
+      {
+        "id": "link-02",
+        "source": "OLT-MST-01",
+        "target": "SPLITTER-01",
+        "status": "up",
+        "properties": {
+          "type": "fiber",
+          "length_km": 2.5
+        }
+      },
+      {
+        "id": "link-03",
+        "source": "SPLITTER-01",
+        "target": "ONT-KUNDE-123",
+        "status": "up",
+        "properties": {
+          "type": "fiber",
+          "length_km": 0.8
+        }
+      },
+      {
+        "id": "link-04",
+        "source": "SPLITTER-01",
+        "target": "ONT-KUNDE-124",
+        "status": "down",
+        "properties": {
+          "type": "fiber",
+          "length_km": 1.2
+        }
+      }
+    ]
+  },
+  "events": []
+}
