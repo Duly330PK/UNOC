@@ -7,8 +7,7 @@
 import pytest
 import copy
 import os
-from backend import app, app_state, load_and_validate_topology, SNAPSHOT_DIR, initialize_rings
-from backend import build_graph
+from backend import app, app_state, load_and_validate_topology, SNAPSHOT_DIR, initialize_rings, build_graph
 
 # --- Test Setup ---
 BASE_TOPOLOGY = load_and_validate_topology()
@@ -19,24 +18,28 @@ def client():
     """Create a test client, resetting state and cleaning up snapshots."""
     app.config['TESTING'] = True
 
+    # Cleanup snapshot directory before tests
     if not os.path.exists(SNAPSHOT_DIR):
         os.makedirs(SNAPSHOT_DIR)
     for f in os.listdir(SNAPSHOT_DIR):
         os.remove(os.path.join(SNAPSHOT_DIR, f))
 
+    # Reset app state for each test
     app_state["topology"] = copy.deepcopy(BASE_TOPOLOGY)
     app_state["graph"] = build_graph(app_state["topology"])
-    app_state["events"] = []         # <- Fix: Events leeren VOR initialize_rings!
+    app_state["events"] = []      # <- Fix: Events leeren VOR initialize_rings!
     app_state["undo_stack"] = []
     app_state["redo_stack"] = []
-    initialize_rings()               # <- Jetzt erzeugt initialize_rings() Events!
+    initialize_rings()            # <- Jetzt erzeugt initialize_rings() Events!
 
     with app.test_client() as client:
         yield client
 
-    for f in os.listdir(SNAPSHOT_DIR):
-        os.remove(os.path.join(SNAPSHOT_DIR, f))
-        
+    # Cleanup snapshot directory after tests
+    if os.path.exists(SNAPSHOT_DIR):
+        for f in os.listdir(SNAPSHOT_DIR):
+            os.remove(os.path.join(SNAPSHOT_DIR, f))
+
 # --- Test Cases ---
 
 def test_get_topology_success(client):
@@ -157,12 +160,17 @@ def test_fiber_cut_scenario(client):
     assert undo_resp.status_code == 200
 
     topo_after_undo = client.get('/api/topology').get_json()
-    for ont in onts:
-        # mind. einer sollte wieder online sein, ist aber abhängig von Start-Topo
-        assert ont['status'] in ('online', 'offline')
-    for l in affected_links:
-        link = next(link for link in topo_after_undo['links'] if link['id'] == l['id'])
-        assert link['status'] in ('up', 'degraded', 'blocking', 'down')
+    # After undo, the state should be exactly as before the fiber cut.
+    # We find the original devices and links from the base topology to check their status.
+    original_onts = [d for d in BASE_TOPOLOGY.devices if d.id in [o['id'] for o in onts]]
+    for original_ont in original_onts:
+         restored_ont = next(ont for ont in topo_after_undo['devices'] if ont['id'] == original_ont.id)
+         assert restored_ont['status'] == original_ont.status
+
+    original_affected_links = [l for l in BASE_TOPOLOGY.links if l.id in [al['id'] for al in affected_links]]
+    for original_link in original_affected_links:
+        restored_link = next(link for link in topo_after_undo['links'] if link['id'] == original_link.id)
+        assert restored_link['status'] == original_link.status
 
 def test_get_topology_stats(client):
     """
@@ -206,25 +214,59 @@ def test_erps_failover_scenario(client):
     """
     # Suche einen Ring mit RPL-Link und einen beliebigen Nicht-RPL-Link im Ring
     topo1 = client.get('/api/topology').get_json()
-    assert 'rings' in topo1 and len(topo1['rings']) > 0
+    assert 'rings' in topo1 and len(topo1['rings']) > 0, "Kein Ring in der Topologie definiert."
     ring = topo1['rings'][0]
     rpl_link = ring['rpl_link_id']
     # Finde ein Link im Ring, der nicht der RPL ist und aktuell up ist
-    ring_links = [l['id'] for l in topo1['links']
+    ring_links_ids = [l['id'] for l in topo1['links']
                   if l['source'] in ring['nodes'] and l['target'] in ring['nodes'] and l['id'] != rpl_link]
-    link_to_break = next((l for l in ring_links if next(li for li in topo1['links'] if li['id'] == l)['status'] == 'up'), None)
-    assert link_to_break, "Kein up-Link im Ring gefunden"
+    
+    link_to_break = None
+    for link_id in ring_links_ids:
+        link_details = next((l for l in topo1['links'] if l['id'] == link_id), None)
+        if link_details and link_details['status'] == 'up':
+            link_to_break = link_id
+            break
+
+    assert link_to_break, "Kein 'up'-Link im Ring gefunden, um einen Failover zu testen."
+    
     # 1. Verify initial state: RPL should be blocking
     assert next(l for l in topo1['links'] if l['id'] == rpl_link)['status'] == 'blocking'
+
     # 2. Break an active link in the ring
     client.post(f'/api/links/{link_to_break}/status', json={"status": "down"})
+
     # 3. Verify failover: The broken link is down, and the RPL is now up
     topo2 = client.get('/api/topology').get_json()
     assert next(l for l in topo2['links'] if l['id'] == link_to_break)['status'] == 'down'
     assert next(l for l in topo2['links'] if l['id'] == rpl_link)['status'] == 'up'
+
     # 4. Undo the entire operation
     client.post('/api/simulation/undo')
+
     # 5. Verify restored state: Broken link is up again, RPL is blocking again
     topo3 = client.get('/api/topology').get_json()
     assert next(l for l in topo3['links'] if l['id'] == link_to_break)['status'] == 'up'
     assert next(l for l in topo3['links'] if l['id'] == rpl_link)['status'] == 'blocking'
+
+def test_optical_power_calculation(client):
+    """
+    Tests the optical power calculation for a specific ONT.
+    """
+    ont_id = "ONT-KUNDE-123"
+    
+    # Manuelle Berechnung basierend auf topology.yml
+    # OLT-MST-01 (4.0 dBm) -> link-02 (2.5km) -> SPLITTER-01 (10.5 dB) -> link-03 (0.8km) -> ONT
+    tx_power = 4.0
+    link2_loss = 2.5 * 0.35 # FIBER_LOSS_PER_KM
+    link3_loss = 0.8 * 0.35
+    splitter_loss = 10.5
+    expected_power = tx_power - link2_loss - link3_loss - splitter_loss
+    
+    response = client.get(f'/api/devices/{ont_id}/signal')
+    assert response.status_code == 200
+    data = response.get_json()
+    
+    assert data['status'] == 'GOOD'
+    # pytest.approx wird für Fließkommavergleiche verwendet
+    assert data['power_dbm'] == pytest.approx(expected_power, abs=0.01)

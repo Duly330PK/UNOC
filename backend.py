@@ -35,11 +35,14 @@ SNAPSHOT_DIR = os.path.join(os.path.dirname(__file__), 'snapshots')
 # --- In-Memory State ---
 app_state = {
     "topology": None,
-    "graph": None,  # NEU: Für Graphenanalyse
+    "graph": None,  # Für Graphenanalyse
     "events": [],
     "undo_stack": [],
     "redo_stack": []
 }
+
+# --- Physikalische Konstanten ---
+FIBER_LOSS_PER_KM = 0.35 # dB pro Kilometer
 
 # --- Helper Functions ---
 def add_event(message: str):
@@ -71,7 +74,7 @@ def build_graph(topology: Topology) -> nx.DiGraph:
 def initialize_rings():
     """Sets the initial state for all defined rings (e.g., blocks RPL)."""
     topology = app_state["topology"]
-    if not topology.rings:
+    if not hasattr(topology, 'rings') or not topology.rings:
         return
 
     for ring in topology.rings:
@@ -85,8 +88,10 @@ def handle_ring_failure(broken_link_id: str):
     topology = app_state["topology"]
     # Find the ring that contains the broken link
     affected_ring = None
+    if not hasattr(topology, 'rings') or not topology.rings:
+        return None
+        
     for r in topology.rings:
-        # A link is in the ring if both its source and target nodes are part of the ring's node list
         link_nodes = set()
         for l in topology.links:
             if l.id == broken_link_id:
@@ -94,7 +99,8 @@ def handle_ring_failure(broken_link_id: str):
                 link_nodes.add(l.target)
                 break
         
-        if link_nodes.issubset(set(r.nodes)):
+        # Check if both nodes of the link are in the ring's node list
+        if hasattr(r, 'nodes') and link_nodes.issubset(set(r.nodes)):
             affected_ring = r
             break
 
@@ -108,6 +114,74 @@ def handle_ring_failure(broken_link_id: str):
         add_event(f"ERPS: Failover in Ring '{affected_ring.id}'. Unblocking RPL '{rpl_link.id}'.")
         return failover_command
     return None
+
+# --- Berechnungslogik ---
+def calculate_ont_power(ont_id: str):
+    """
+    Calculates the received optical power at a specific ONT.
+    Returns a dictionary with power level and status.
+    """
+    graph = app_state["graph"]
+    topology = app_state["topology"]
+
+    # 1. Finde den Pfad vom ONT zu einem OLT
+    try:
+        olts = [d.id for d in topology.devices if d.type == 'OLT']
+        path_to_olt = None
+        for olt_id in olts:
+            if nx.has_path(graph, olt_id, ont_id):
+                path_to_olt = nx.shortest_path(graph, source=olt_id, target=ont_id)
+                break
+        if not path_to_olt:
+            raise nx.NetworkXNoPath
+    except (nx.NetworkXNoPath, nx.NodeNotFound):
+        return {"status": "NO_PATH", "power_dbm": None}
+
+    # --- KORREKTUR: Validierung des Pfadstatus ---
+    # 2. Prüfe, ob alle Geräte und Links auf dem Pfad betriebsbereit sind
+    path_devices_data = [graph.nodes[node_id]['data'] for node_id in path_to_olt]
+    path_links_data = [graph.get_edge_data(path_to_olt[i], path_to_olt[i+1])['data'] for i in range(len(path_to_olt) - 1)]
+
+    # Prüfe den Gerätestatus (überspringe das erste Gerät, den OLT, da er der Startpunkt ist)
+    for device in path_devices_data[1:]:
+        if device.status == 'offline':
+            return {"status": "NO_PATH", "power_dbm": None, "reason": f"Device {device.id} is offline"}
+    
+    # Prüfe den Linkstatus
+    for link in path_links_data:
+        # Ein Link im Status 'blocking' ist für die Konnektivität in Ringen nicht 'down'
+        if link.status not in ['up', 'blocking']:
+            return {"status": "NO_PATH", "power_dbm": None, "reason": f"Link {link.id} is {link.status}"}
+    # --- ENDE KORREKTUR ---
+
+    # 3. Extrahiere die Sendeleistung vom OLT
+    olt_device = path_devices_data[0]
+    transmit_power = olt_device.properties.get("transmit_power_dbm", 0)
+
+    # 4. Berechne die Dämpfung
+    total_loss = 0
+    # Faser-Dämpfung
+    for link_data in path_links_data:
+        total_loss += link_data.properties.get("length_km", 0) * FIBER_LOSS_PER_KM
+    
+    # Splitter-Dämpfung
+    for device in path_devices_data:
+        if device.type == 'Splitter':
+            total_loss += device.properties.get("insertion_loss_db", 0)
+
+    # 5. Berechne den empfangenen Pegel
+    received_power = transmit_power - total_loss
+
+    # 6. Bestimme den Signalstatus
+    if received_power >= -25:
+        signal_status = "GOOD"
+    elif -28 < received_power < -25:
+        signal_status = "WARNING"
+    else:
+        signal_status = "LOS"  # Loss of Signal
+
+    return {"status": signal_status, "power_dbm": round(received_power, 2)}
+
 
 # --- Data Loading and Initialization ---
 def load_and_validate_topology(filepath="topology.yml"):
@@ -178,13 +252,11 @@ def update_link_status(link_id: str):
     if not target_link:
         abort(404, description=f"Link with ID '{link_id}' not found.")
 
-    # The command for the original action
     main_command = UpdateLinkStatusCommand(topology, link_id, payload.status)
     
-    composite_command = CompositeCommand()
-    composite_command.add(main_command)
+    composite_command = CompositeCommand([main_command])
     
-    # NEW: Check if a ring failover needs to be triggered
+    # Check if a ring failover needs to be triggered
     if payload.status in ['down', 'degraded']:
         failover_cmd = handle_ring_failure(link_id)
         if failover_cmd:
@@ -193,10 +265,23 @@ def update_link_status(link_id: str):
     try:
         execute_command(composite_command)
         add_event(f"SIMULATION: Status of link '{link_id}' changed to '{payload.status}'.")
-        # Return the updated link object, as the original command might be part of a composite
         return jsonify(target_link.model_dump())
     except ValueError as e:
         abort(500, description=str(e))
+
+@app.route('/api/devices/<string:device_id>/signal', methods=['GET'])
+def get_device_signal(device_id: str):
+    """
+    Endpoint to get the calculated signal strength for an ONT.
+    """
+    device = next((d for d in app_state["topology"].devices if d.id == device_id), None)
+    if not device:
+        abort(404, description="Device not found.")
+    if device.type != 'ONT':
+        return jsonify({"status": "NOT_APPLICABLE", "power_dbm": None})
+
+    signal_info = calculate_ont_power(device_id)
+    return jsonify(signal_info)
 
 @app.route('/api/simulation/undo', methods=['POST'])
 def undo_last_action():
@@ -231,26 +316,33 @@ def fiber_cut():
 
     graph = app_state["graph"]
     topology = app_state["topology"]
+    
+    # Find all nodes downstream from the cut point
     descendant_nodes = nx.descendants(graph, cut_node_id)
-
-    affected_links = [
-        link for link in topology.links
-        if (link.source in descendant_nodes or link.source == cut_node_id)
-        and (link.target in descendant_nodes or link.target == cut_node_id)
-    ]
+    # The cut node itself is also affected
+    affected_nodes_set = descendant_nodes.union({cut_node_id})
 
     composite_command = CompositeCommand()
 
-    for node_id in descendant_nodes:
-        composite_command.add(UpdateDeviceStatusCommand(topology, node_id, 'offline'))
+    # Set affected devices to 'offline'
+    for node_id in affected_nodes_set:
+        device = next((d for d in topology.devices if d.id == node_id), None)
+        if device and device.status != 'offline':
+            composite_command.add(UpdateDeviceStatusCommand(topology, node_id, 'offline'))
 
-    for link in affected_links:
-        composite_command.add(UpdateLinkStatusCommand(topology, link.id, 'down'))
+    # Set all links connected to the affected area to 'down'
+    # This includes links originating from or terminating at an affected node
+    for link in topology.links:
+        if link.source in affected_nodes_set or link.target in affected_nodes_set:
+            if link.status != 'down':
+                composite_command.add(UpdateLinkStatusCommand(topology, link.id, 'down'))
 
-    execute_command(composite_command)
-    add_event(f"SCENARIO: Fiber cut at '{cut_node_id}' affected {len(descendant_nodes)} devices and {len(affected_links)} links.")
+    if composite_command.commands:
+        execute_command(composite_command)
+        add_event(f"SCENARIO: Fiber cut at '{cut_node_id}' affected {len(affected_nodes_set)} devices.")
 
     return jsonify({"message": f"Fiber cut scenario at '{cut_node_id}' executed."})
+
 
 # --- Snapshot Endpoints ---
 @app.route('/api/snapshot/save', methods=['POST'])
@@ -277,7 +369,7 @@ def load_snapshot():
     snapshot_name = request.get_json()['name']
     snapshot_path = os.path.join(SNAPSHOT_DIR, f"{snapshot_name}.json")
     if not os.path.exists(snapshot_path):
-        abort(404)
+        abort(404, "Snapshot not found.")
 
     with open(snapshot_path, 'r', encoding='utf-8') as f:
         snapshot_data = json.load(f)
@@ -287,9 +379,7 @@ def load_snapshot():
     app_state["graph"] = build_graph(topology)
     app_state["events"] = snapshot_data.get("events", [])
     clear_history()
-    # After loading a snapshot, re-initialize the rings to their defined state
-    initialize_rings()
-
+    
     add_event(f"SYSTEM: Snapshot '{snapshot_name}' loaded successfully.")
     return jsonify({"message": "Snapshot loaded."})
 
@@ -298,7 +388,7 @@ if __name__ == '__main__':
     topology = load_and_validate_topology()
     app_state["topology"] = topology
     app_state["graph"] = build_graph(topology)
-    initialize_rings() # NEU: Ring-Status initialisieren
+    initialize_rings()
     add_event("SYSTEM: Backend started, topology/graph loaded, rings initialized.")
-    print("Starting UNOC backend server (v8 with ERPS Simulation)...")
+    print("Starting UNOC backend server (v9 with fixed Power Calculation)...")
     app.run(host='0.0.0.0', port=5000, debug=True)

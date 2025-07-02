@@ -208,6 +208,10 @@
         
         .loader { color: var(--text-muted); font-style: italic; }
 
+        .signal-good { color: var(--accent-green); font-weight: bold; }
+        .signal-warning { color: #FFC107; font-weight: bold; }
+        .signal-los { color: var(--accent-red); font-weight: bold; }
+
         /* MODAL STYLES */
         #modal-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -461,20 +465,55 @@
             });
         }
 
-        function renderProperties(data) {
-            const content = document.getElementById('properties-content');
-            if (!data) {
-                content.innerHTML = '<span class="loader">Kein Element ausgewählt</span>';
+        async function renderProperties(dataToShow) {
+            const contentDiv = document.getElementById('properties-content');
+            if (!dataToShow) {
+                contentDiv.innerHTML = '<span class="loader">Kein Element ausgewählt</span>';
                 return;
             }
+            
+            // Bisherige Tabellenerstellung
             let table = '<table>';
-            for (const [k, v] of Object.entries(data)) {
+            for (const [k, v] of Object.entries(dataToShow)) {
                 let displayValue = v;
                 if (k === 'coordinates' && Array.isArray(v)) displayValue = `${v[0].toFixed(4)}, ${v[1].toFixed(4)}`;
                 else if (typeof v === 'object' && v !== null) displayValue = JSON.stringify(v);
                 table += `<tr><th>${k}</th><td>${displayValue}</td></tr>`;
             }
-            content.innerHTML = table + '</table>';
+            table += '</table>';
+            contentDiv.innerHTML = table;
+            
+            // KORREKTUR: Wenn es ein ONT ist, Signalpegel abfragen und alle Fälle behandeln
+            if (dataToShow.type === 'ONT') {
+                try {
+                    const response = await fetch(`${backendUrl}/api/devices/${dataToShow.id}/signal`);
+                    if (!response.ok) return;
+                    const signalInfo = await response.json();
+                    
+                    if (!signalInfo || signalInfo.status === 'NOT_APPLICABLE') {
+                        return; // Nichts tun, wenn nicht anwendbar
+                    }
+
+                    const signalRow = document.createElement('tr');
+                    let signalCellHTML = '';
+
+                    // Prüfe den Status und erstelle die entsprechende Tabellenzelle
+                    if (signalInfo.status === 'NO_PATH') {
+                        signalCellHTML = `<td class="signal-los">${signalInfo.status} (Pfad unterbrochen)</td>`;
+                    } else if (signalInfo.power_dbm !== null) {
+                        const signalStatusClass = `signal-${signalInfo.status.toLowerCase()}`;
+                        signalCellHTML = `<td class="${signalStatusClass}">${signalInfo.power_dbm} dBm (${signalInfo.status})</td>`;
+                    }
+
+                    // Füge die Zeile nur hinzu, wenn es Inhalt gibt
+                    if (signalCellHTML) {
+                        signalRow.innerHTML = `<th>Signal Level</th>${signalCellHTML}`;
+                        contentDiv.querySelector('table').appendChild(signalRow);
+                    }
+                } catch (e) {
+                    console.error("Fehler beim Abrufen des Signalpegels:", e);
+                }
+            }
         }
         
         function toggleView() {
@@ -490,7 +529,7 @@
         // --- MODAL FUNCTIONS ---
         function showModal(title, message, buttons = [{ text: 'OK', class: 'modal-btn-primary', callback: hideModal }]) {
             document.getElementById('modal-title').textContent = title;
-            document.getElementById('modal-message').textContent = message;
+            document.getElementById('modal-message').innerHTML = message; // Use innerHTML to allow simple formatting
             const buttonContainer = document.getElementById('modal-buttons');
             buttonContainer.innerHTML = '';
             buttons.forEach(btnInfo => {
@@ -515,6 +554,7 @@
             network.on('click', params => {
                 const elementId = params.nodes[0] || params.edges[0];
                 const dataset = params.nodes.length ? nodes : edges;
+                // The 'data' property holds the original object from the topology
                 renderProperties(elementId ? dataset.get(elementId).data : null);
             });
 
@@ -542,8 +582,16 @@
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
-                if (!res.ok) throw new Error((await res.json()).description || "Unbekannter Backend-Fehler");
-                await pollForUpdates();
+                if (!res.ok) {
+                    const errorData = await res.json();
+                    throw new Error(errorData.description || "Unbekannter Backend-Fehler");
+                }
+                // For load snapshot, we need a full re-initialization
+                if (endpoint.includes('load')) {
+                   await initialize();
+                } else {
+                   await pollForUpdates();
+                }
             } catch (error) {
                 console.error("Aktion fehlgeschlagen:", error);
                 showModal('Aktion fehlgeschlagen', error.message);
@@ -553,7 +601,7 @@
         function simulateFiberCut() {
             const nodeId = document.getElementById('splitter-select').value;
             if (nodeId) {
-                showModal('Faserschnitt simulieren', `Soll ein Faserschnitt bei ${nodeId} wirklich simuliert werden?`,
+                showModal('Faserschnitt simulieren', `Soll ein Faserschnitt bei <strong>${nodeId}</strong> wirklich simuliert werden?`,
                     [{ text: 'Abbrechen', class: 'modal-btn-secondary' }, { text: 'Simulieren', class: 'modal-btn-danger', callback: () => postAction('/api/simulation/fiber-cut', { node_id: nodeId }) }]
                 );
             }
@@ -568,7 +616,7 @@
         function loadSnapshot() {
             const name = document.getElementById('snapshot-name').value.trim();
             if (name) {
-                showModal('Snapshot laden', `Soll der Snapshot '${name}' wirklich geladen werden? Alle ungespeicherten Änderungen gehen verloren.`,
+                showModal('Snapshot laden', `Soll der Snapshot '<strong>${name}</strong>' wirklich geladen werden? Alle ungespeicherten Änderungen gehen verloren.`,
                     [{ text: 'Abbrechen', class: 'modal-btn-secondary' }, { text: 'Laden', class: 'modal-btn-primary', callback: () => postAction('/api/snapshot/load', { name }) }]
                 );
             } else showModal('Fehler', 'Bitte den Namen des zu ladenden Snapshots eingeben.');
@@ -665,9 +713,9 @@
                  const commandsWithLinkIds = ['link-down', 'link-up', 'link-degraded'];
                  const commandsWithNodeIds = ['cut', 'fiber-cut'];
                  if (commandsWithLinkIds.includes(command)) {
-                    suggestions = edges.get().map(item => item.id);
+                     suggestions = edges.get().map(item => item.id);
                  } else if (commandsWithNodeIds.includes(command)) {
-                    suggestions = nodes.get().map(item => item.id);
+                     suggestions = nodes.get().map(item => item.id);
                  }
                  renderSuggestions(suggestions, command);
             } else if (parts.length >= 2) {

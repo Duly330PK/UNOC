@@ -7,7 +7,9 @@ devices:
   - id: OLT-MST-01
     type: OLT
     status: online
-    properties: { "name": "OLT-Muenster-01" }
+    properties:
+      name: "OLT-Muenster-01"
+      transmit_power_dbm: 4.0 # NEU: Sendeleistung in dBm
     coordinates: [51.960, 7.625]
   - id: AGG-MST-01
     type: Aggregation Switch
@@ -27,7 +29,9 @@ devices:
   - id: SPLITTER-01
     type: Splitter
     status: online
-    properties: { ratio: "1:16" }
+    properties:
+      ratio: "1:16"
+      insertion_loss_db: 10.5 # NEU: Dämpfung für einen 1:16 Splitter (realistischer Wert)
   - id: ONT-KUNDE-123
     type: ONT
     status: online
