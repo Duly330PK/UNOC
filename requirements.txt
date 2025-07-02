@@ -7,3 +7,4 @@ PyYAML==6.0.1
 Flask-Cors==4.0.1
 pydantic==2.8.2
 pytest==8.2.2
+networkx==3.3  # NEU: Für Graphenanalyse und Undo/Redo

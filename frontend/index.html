@@ -35,8 +35,8 @@
         .panel { padding: 15px; border-bottom: 1px solid var(--border-color); overflow-y: auto; }
         .panel h2 { margin-bottom: 10px; border-bottom: 1px solid #555; padding-bottom: 5px; }
 
+        #scenario-panel, #snapshot-panel, #controls-panel { flex-shrink: 0; }
         #properties-panel { flex-grow: 1; }
-        #snapshot-panel, #controls-panel { flex-shrink: 0; }
         #events-panel { height: 35%; flex-shrink: 0; }
 
         #properties-content {
@@ -53,7 +53,7 @@
 
         .loader { color: var(--text-muted); font-style: italic; }
 
-        input, button {
+        input, button, select {
             width: calc(100% - 10px); padding: 8px 5px; margin-bottom: 10px;
             border-radius: 3px; border: 1px solid #666;
             background-color: #333; color: var(--text-color); font-size: 14px;
@@ -74,6 +74,13 @@
 <main>
     <div id="network-container"></div>
     <aside id="sidebar">
+
+        <!-- NEU: Szenarien-Panel -->
+        <div id="scenario-panel" class="panel">
+            <h2>Szenarien</h2>
+            <select id="splitter-select"></select>
+            <button id="fiber-cut-btn">Faserschnitt simulieren</button>
+        </div>
 
         <!-- Undo/Redo Panel -->
         <div id="controls-panel" class="panel">
@@ -150,6 +157,8 @@
             nodes.add(topology.devices.map(formatDeviceToNode));
             edges.add(topology.links.map(formatLinkToEdge));
 
+            populateSplitterDropdown(topology.devices);
+
             if (!network) {
                 const container = document.getElementById('network-container');
                 const data = { nodes, edges };
@@ -167,6 +176,18 @@
         }
     }
 
+    function populateSplitterDropdown(devices) {
+        const select = document.getElementById('splitter-select');
+        select.innerHTML = '';
+        const splitters = devices.filter(d => d.type.toLowerCase() === 'splitter');
+        splitters.forEach(splitter => {
+            const option = document.createElement('option');
+            option.value = splitter.id;
+            option.textContent = splitter.id;
+            select.appendChild(option);
+        });
+    }
+
     function setupEventListeners() {
         network.on('click', (params) => {
             const contentDiv = document.getElementById('properties-content');
@@ -180,7 +201,45 @@
         document.getElementById('load-snapshot-btn').addEventListener('click', loadSnapshot);
         document.getElementById('undo-btn').addEventListener('click', undoAction);
         document.getElementById('redo-btn').addEventListener('click', redoAction);
+        document.getElementById('fiber-cut-btn').addEventListener('click', simulateFiberCut);
     }
+
+    async function simulateFiberCut() {
+        const nodeId = document.getElementById('splitter-select').value;
+        if (!nodeId) {
+            alert("Bitte einen Splitter auswählen.");
+            return;
+        }
+        if (!confirm(`Sicher, dass ein Faserschnitt bei '${nodeId}' simuliert werden soll?`)) return;
+        await postAction('/api/simulation/fiber-cut', { node_id: nodeId });
+    }
+
+async function postAction(endpoint, payload = {}) {
+    try {
+        const response = await fetch(`${backendUrl}${endpoint}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.description || "Aktion fehlgeschlagen");
+        }
+        await pollForUpdates();
+        await refreshTopologyDisplay();
+    } catch (error) {
+        alert(error.message);
+    }
+}
+
+// ✅ Korrekt außerhalb von postAction:
+async function undoAction() {
+    await postAction('/api/simulation/undo');
+}
+
+async function redoAction() {
+    await postAction('/api/simulation/redo');
+}
 
     async function pollForUpdates() {
         try {
@@ -197,7 +256,7 @@
                 }
             }
 
-            updateHistoryButtons(); // NEU
+            updateHistoryButtons();
         } catch (error) {}
     }
 
@@ -259,28 +318,6 @@
         } catch (error) {
             console.error("Fehler beim Laden:", error);
             alert(`Fehler beim Laden des Snapshots: ${error.message}`);
-        }
-    }
-
-    async function undoAction() {
-        await postAction('/api/simulation/undo');
-    }
-
-    async function redoAction() {
-        await postAction('/api/simulation/redo');
-    }
-
-    async function postAction(endpoint) {
-        try {
-            const response = await fetch(`${backendUrl}${endpoint}`, { method: 'POST' });
-            if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.description || "Aktion fehlgeschlagen");
-            }
-            await pollForUpdates();
-            await refreshTopologyDisplay();
-        } catch (error) {
-            alert(error.message);
         }
     }
 

@@ -12,18 +12,30 @@ import json
 from flask import Flask, jsonify, abort, request
 from flask_cors import CORS
 from pydantic import ValidationError
+import networkx as nx
 
-from schemas import Topology, UpdateLinkStatusPayload, SUPPORTED_TOPOLOGY_VERSION
-from commands import UpdateLinkStatusCommand
+from schemas import (
+    Topology,
+    UpdateLinkStatusPayload,
+    UpdateDeviceStatusPayload,
+    SUPPORTED_TOPOLOGY_VERSION
+)
+from commands import (
+    UpdateLinkStatusCommand,
+    UpdateDeviceStatusCommand,
+    CompositeCommand
+)
 
 # --- Application Setup ---
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "http://localhost:8000"}}, supports_credentials=True, methods=["GET", "POST", "OPTIONS"])
+
 SNAPSHOT_DIR = os.path.join(os.path.dirname(__file__), 'snapshots')
 
 # --- In-Memory State ---
 app_state = {
     "topology": None,
+    "graph": None,  # NEU: Für Graphenanalyse
     "events": [],
     "undo_stack": [],
     "redo_stack": []
@@ -39,7 +51,6 @@ def execute_command(command):
     """Executes a command and manages undo/redo stacks."""
     command.execute()
     app_state["undo_stack"].append(command)
-    # Any new action clears the redo stack
     app_state["redo_stack"].clear()
 
 def clear_history():
@@ -47,9 +58,17 @@ def clear_history():
     app_state["undo_stack"].clear()
     app_state["redo_stack"].clear()
 
+def build_graph(topology: Topology) -> nx.DiGraph:
+    """Builds a NetworkX directed graph from the topology data."""
+    G = nx.DiGraph()
+    for device in topology.devices:
+        G.add_node(device.id, data=device)
+    for link in topology.links:
+        G.add_edge(link.source, link.target, data=link)
+    return G
+
 # --- Data Loading and Initialization ---
 def load_and_validate_topology(filepath="topology.yml"):
-    # (Dieser Code bleibt unverändert von der letzten Version)
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             data = yaml.safe_load(f)
@@ -65,7 +84,6 @@ def load_and_validate_topology(filepath="topology.yml"):
         print(f"FATAL: Could not load topology from '{filepath}': {e}", file=sys.stderr)
         sys.exit(1)
 
-
 # --- API Endpoints ---
 @app.route('/api/topology', methods=['GET'])
 def get_topology():
@@ -79,13 +97,11 @@ def get_events():
 
 @app.route('/api/history/status', methods=['GET'])
 def get_history_status():
-    """Returns the status of undo/redo stacks."""
     return jsonify({
         "can_undo": len(app_state["undo_stack"]) > 0,
         "can_redo": len(app_state["redo_stack"]) > 0
     })
 
-# --- Simulation Endpoints ---
 @app.route('/api/links/<string:link_id>/status', methods=['POST'])
 def update_link_status(link_id: str):
     try:
@@ -96,7 +112,7 @@ def update_link_status(link_id: str):
     topology = app_state["topology"]
     if not any(link.id == link_id for link in topology.links):
         abort(404, description=f"Link with ID '{link_id}' not found.")
-        
+
     command = UpdateLinkStatusCommand(topology, link_id, payload.status)
     try:
         execute_command(command)
@@ -107,65 +123,102 @@ def update_link_status(link_id: str):
 
 @app.route('/api/simulation/undo', methods=['POST'])
 def undo_last_action():
-    """Undoes the last executed command."""
     if not app_state["undo_stack"]:
         abort(400, description="Nothing to undo.")
-        
     command = app_state["undo_stack"].pop()
     command.undo()
     app_state["redo_stack"].append(command)
-    
-    add_event(f"SYSTEM: Undid last action.")
+    add_event("SYSTEM: Undid last action.")
     return jsonify({"message": "Action undone."})
 
 @app.route('/api/simulation/redo', methods=['POST'])
 def redo_last_action():
-    """Redoes the last undone command."""
     if not app_state["redo_stack"]:
         abort(400, description="Nothing to redo.")
-        
     command = app_state["redo_stack"].pop()
     command.execute()
     app_state["undo_stack"].append(command)
-    
-    add_event(f"SYSTEM: Redid last action.")
+    add_event("SYSTEM: Redid last action.")
     return jsonify({"message": "Action redone."})
 
-# --- Snapshot Endpoints (angepasst für History) ---
+@app.route('/api/simulation/fiber-cut', methods=['POST'])
+def fiber_cut():
+    """
+    Simulates a fiber cut affecting a specific node (e.g., a splitter).
+    All downstream links and devices will be set to 'down'/'offline'.
+    """
+    payload = request.get_json()
+    cut_node_id = payload.get('node_id')
+    if not cut_node_id or not app_state["graph"].has_node(cut_node_id):
+        abort(404, description=f"Node '{cut_node_id}' not found.")
+
+    graph = app_state["graph"]
+    topology = app_state["topology"]
+    descendant_nodes = nx.descendants(graph, cut_node_id)
+
+    affected_links = [
+        link for link in topology.links
+        if (link.source in descendant_nodes or link.source == cut_node_id)
+        and (link.target in descendant_nodes or link.target == cut_node_id)
+    ]
+
+    composite_command = CompositeCommand()
+
+    for node_id in descendant_nodes:
+        composite_command.add(UpdateDeviceStatusCommand(topology, node_id, 'offline'))
+
+    for link in affected_links:
+        composite_command.add(UpdateLinkStatusCommand(topology, link.id, 'down'))
+
+    execute_command(composite_command)
+    add_event(f"SCENARIO: Fiber cut at '{cut_node_id}' affected {len(descendant_nodes)} devices and {len(affected_links)} links.")
+
+    return jsonify({"message": f"Fiber cut scenario at '{cut_node_id}' executed."})
+
+# --- Snapshot Endpoints ---
 @app.route('/api/snapshot/save', methods=['POST'])
 def save_snapshot():
     snapshot_name = request.get_json()['name']
     snapshot_path = os.path.join(SNAPSHOT_DIR, f"{snapshot_name}.json")
-    if not os.path.exists(SNAPSHOT_DIR): os.makedirs(SNAPSHOT_DIR)
-    
-    # 🟢 ZUERST Event hinzufügen
+    if not os.path.exists(SNAPSHOT_DIR):
+        os.makedirs(SNAPSHOT_DIR)
+
     add_event(f"SYSTEM: Snapshot '{snapshot_name}' saved.")
-    
-    # 🟢 DANN speichern (damit Event im Snapshot enthalten ist)
+
     state_to_save = {
         "topology": app_state["topology"].model_dump(),
         "events": app_state["events"]
     }
+
     with open(snapshot_path, 'w', encoding='utf-8') as f:
         json.dump(state_to_save, f, indent=2)
-    
+
     return jsonify({"message": "Snapshot saved."}), 201
 
 @app.route('/api/snapshot/load', methods=['POST'])
 def load_snapshot():
     snapshot_name = request.get_json()['name']
     snapshot_path = os.path.join(SNAPSHOT_DIR, f"{snapshot_name}.json")
-    if not os.path.exists(snapshot_path): abort(404)
-    with open(snapshot_path, 'r', encoding='utf-8') as f: snapshot_data = json.load(f)
-    app_state["topology"] = Topology.model_validate(snapshot_data["topology"])
+    if not os.path.exists(snapshot_path):
+        abort(404)
+
+    with open(snapshot_path, 'r', encoding='utf-8') as f:
+        snapshot_data = json.load(f)
+
+    topology = Topology.model_validate(snapshot_data["topology"])
+    app_state["topology"] = topology
+    app_state["graph"] = build_graph(topology)
     app_state["events"] = snapshot_data.get("events", [])
-    clear_history() # WICHTIG: History beim Laden eines Snapshots zurücksetzen
+    clear_history()
+
     add_event(f"SYSTEM: Snapshot '{snapshot_name}' loaded successfully.")
     return jsonify({"message": "Snapshot loaded."})
 
 # --- Main Execution ---
 if __name__ == '__main__':
-    app_state["topology"] = load_and_validate_topology()
-    add_event("SYSTEM: Backend started and topology loaded successfully.")
-    print("Starting UNOC backend server (v5 with Undo/Redo)...")
+    topology = load_and_validate_topology()
+    app_state["topology"] = topology
+    app_state["graph"] = build_graph(topology)
+    add_event("SYSTEM: Backend started and topology/graph loaded.")
+    print("Starting UNOC backend server (v6 with Scenarios)...")
     app.run(host='0.0.0.0', port=5000, debug=True)

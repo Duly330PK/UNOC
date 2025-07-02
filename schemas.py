@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Literal
 
 SUPPORTED_TOPOLOGY_VERSION = "1.0.0"
@@ -24,5 +24,12 @@ class Topology(BaseModel):
     devices: List[Device]
     links: List[Link]
 
+# --- API Payload Models ---
+
 class UpdateLinkStatusPayload(BaseModel):
+    """Defines the schema for the request body when updating a link's status."""
     status: LinkStatus
+
+class UpdateDeviceStatusPayload(BaseModel):
+    """Defines the schema for the request body when updating a device's status."""
+    status: DeviceStatus
