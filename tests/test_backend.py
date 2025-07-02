@@ -117,8 +117,6 @@ def test_undo_redo_cycle(client):
     res_hist3 = client.get('/api/history/status')
     assert res_hist3.get_json() == {"can_undo": True, "can_redo": False}
 
-from backend import build_graph  # ganz oben ergänzen, falls noch nicht da
-
 def test_fiber_cut_scenario(client):
     splitter_id = "SPLITTER-01"
 
@@ -145,6 +143,26 @@ def test_fiber_cut_scenario(client):
     ont2_restored = next(d for d in topo_after_undo['devices'] if d['id'] == 'ONT-KUNDE-124')
     link3_restored = next(l for l in topo_after_undo['links'] if l['id'] == 'link-03')
 
-    assert ont1_restored['status'] == 'online'   # original state
-    assert ont2_restored['status'] == 'offline'  # original state
-    assert link3_restored['status'] == 'up'      # original state
+    assert ont1_restored['status'] == 'online'    # original state
+    assert ont2_restored['status'] == 'offline'   # original state
+    assert link3_restored['status'] == 'up'       # original state
+
+def test_get_topology_stats(client):
+    """
+    Tests the statistics calculation endpoint.
+    """
+    # 1. Get initial stats
+    response1 = client.get('/api/topology/stats')
+    assert response1.status_code == 200
+    stats1 = response1.get_json()
+    assert stats1['devices_online'] == 4 # In topology.yml ist einer offline
+    assert stats1['links_up'] == 3       # Einer ist down
+    assert stats1['alarms'] == 2         # 1 offline device + 1 down link
+
+    # 2. Change a link status and check stats again
+    client.post('/api/links/link-01/status', json={"status": "down"})
+    
+    response2 = client.get('/api/topology/stats')
+    stats2 = response2.get_json()
+    assert stats2['links_up'] == 2
+    assert stats2['alarms'] == 3

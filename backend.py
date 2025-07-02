@@ -91,6 +91,25 @@ def get_topology():
         return jsonify(app_state["topology"].model_dump())
     abort(500)
 
+@app.route('/api/topology/stats', methods=['GET'])
+def get_topology_stats():
+    """Calculates and returns high-level statistics about the network state."""
+    if not app_state["topology"]:
+        abort(500, description="Topology not initialized.")
+    
+    devices = app_state["topology"].devices
+    links = app_state["topology"].links
+    
+    stats = {
+        "devices_total": len(devices),
+        "devices_online": sum(1 for d in devices if d.status == 'online'),
+        "links_total": len(links),
+        "links_up": sum(1 for l in links if l.status == 'up'),
+    }
+    stats["alarms"] = (stats["devices_total"] - stats["devices_online"]) + (stats["links_total"] - stats["links_up"])
+    
+    return jsonify(stats)
+
 @app.route('/api/events', methods=['GET'])
 def get_events():
     return jsonify(app_state["events"])
@@ -220,5 +239,5 @@ if __name__ == '__main__':
     app_state["topology"] = topology
     app_state["graph"] = build_graph(topology)
     add_event("SYSTEM: Backend started and topology/graph loaded.")
-    print("Starting UNOC backend server (v6 with Scenarios)...")
+    print("Starting UNOC backend server (v7 with HUD & CLI support)...")
     app.run(host='0.0.0.0', port=5000, debug=True)
