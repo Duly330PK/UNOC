@@ -18,84 +18,70 @@
             --accent-color: #4CAF50;
             --accent-red: #F44336;
             --accent-green: #4CAF50;
+            --accent-blue-highlight: #00BFFF;
             --font-size-normal: 14px;
             --font-size-large: 16px;
         }
-
         body, html {
             margin: 0; padding: 0;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             background-color: var(--bg-color); color: var(--text-color);
             height: 100vh; overflow: hidden; display: flex; flex-direction: column;
         }
-
         header {
             background-color: var(--header-bg);
             padding: 10px 20px;
             border-bottom: 1px solid var(--border-color);
             flex-shrink: 0;
         }
-        
         h1 { font-size: 1.5em; }
         h2 { font-size: 1.2em; border-bottom: 1px solid #555; padding-bottom: 8px; margin: 0 0 12px 0; }
-
         #main-wrapper {
             display: flex;
             flex-direction: column;
             flex-grow: 1;
             height: calc(100% - 100px);
         }
-
         #top-section {
             display: flex;
             flex-grow: 1;
             height: 70%;
         }
-
         #view-container {
             width: 75%;
             height: 100%;
             position: relative;
         }
-
         #network-container, #map-container {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background-color: var(--bg-color);
         }
-
         #map-container { z-index: 10; visibility: hidden; }
-        
         #view-toggle {
             position: absolute; top: 10px; right: 10px; z-index: 20;
         }
-        
         #view-toggle button {
             width: auto; padding: 8px 12px; background-color: rgba(42, 42, 42, 0.8);
         }
-
         #sidebar {
             width: 25%; height: 100%;
             display: flex; flex-direction: column;
             background-color: var(--panel-bg);
             border-left: 1px solid var(--border-color);
         }
-
         .panel {
             padding: 15px;
             border-bottom: 1px solid var(--border-color);
             overflow-y: auto;
             font-size: var(--font-size-normal);
         }
-        
         #properties-panel { flex-grow: 1; }
-
         #bottom-panel {
             height: 30%;
             border-top: 1px solid var(--border-color);
             display: flex;
             background-color: var(--panel-bg);
         }
-
         .bottom-column {
             flex: 1;
             padding: 15px;
@@ -103,11 +89,9 @@
             flex-direction: column;
             overflow: hidden; 
         }
-
         #event-log-panel {
             border-right: 1px solid var(--border-color);
         }
-
         #event-log, #cli-output {
             flex-grow: 1;
             overflow-y: auto;
@@ -115,22 +99,16 @@
             font-size: 13px;
             line-height: 1.4;
         }
-        
         #event-log { list-style: none; padding: 0; margin: 0; }
         #event-log li { padding: 4px 0; border-bottom: 1px solid #333; }
         #event-log li:first-child { color: var(--accent-color); }
-        
         #cli-panel {
-            display: flex;
-            flex-direction: column;
-            overflow: visible; /* KORREKTUR: Erlaubt, dass die Suggestion-Box überläuft */
+            overflow: visible;
         }
-
         #cli-interaction-area {
-            position: relative; /* Anchor for suggestions */
-            margin-top: auto; /* Pushes this block to the bottom */
+            position: relative;
+            margin-top: auto;
         }
-
         #cli-input-wrapper {
             display: flex;
             align-items: center;
@@ -138,7 +116,6 @@
             padding-bottom: 5px;
         }
         #cli-prompt { font-family: monospace; padding-right: 8px; font-size: var(--font-size-large); color: var(--text-muted); }
-
         #cli-input {
             flex-grow: 1;
             background-color: transparent;
@@ -150,7 +127,6 @@
             margin: 0;
         }
         #cli-input:focus { outline: none; }
-
         #cli-suggestions {
             position: absolute;
             bottom: 100%; 
@@ -163,19 +139,16 @@
             border-bottom: none;
             z-index: 1000;
         }
-        
         .suggestion-item {
             padding: 8px 12px;
             cursor: pointer;
             color: #ddd;
             font-family: monospace;
         }
-        
         .suggestion-item:hover, .suggestion-item.active {
             background-color: #007BFF;
             color: white;
         }
-
         input, button, select {
             padding: 10px;
             margin-bottom: 10px;
@@ -186,33 +159,26 @@
             font-size: var(--font-size-normal);
         }
         select { width: 100%; }
-        .button-group, .input-group { display: flex; gap: 10px; }
+        .button-group { display: flex; gap: 10px; flex-wrap: wrap; }
+        .input-group { display: flex; gap: 10px; }
         .input-group input { flex-grow: 1; margin-bottom: 0; }
         .input-group button { margin-bottom: 0; }
-
         button { cursor: pointer; background-color: #007BFF; border-color: #007BFF; font-weight: bold; }
         button:hover { background-color: #0056b3; }
         button:disabled { background-color: #555; border-color: #666; cursor: not-allowed; }
-
         #hud { display: flex; justify-content: space-around; background-color: #2c2c2c; padding: 10px; border-bottom: 1px solid #444; flex-shrink: 0; }
         .hud-item { text-align: center; }
         .hud-item h3 { margin: 0; font-size: 14px; color: #aaa; text-transform: uppercase; }
         .hud-item p { margin: 5px 0 0; font-size: 22px; font-weight: bold; }
-
         #properties-content table, #ring-info table { width: 100%; border-collapse: collapse; font-size: var(--font-size-normal); }
         #properties-content th, #properties-content td, #ring-info td { padding: 8px; text-align: left; border-bottom: 1px solid #333; }
         #properties-content th { width: 35%; color: var(--text-muted); }
-        
         #ring-panel .status-blocking { color: #FFC107; font-weight: bold; }
         #ring-panel .status-forwarding { color: var(--accent-green); font-weight: bold; }
-        
         .loader { color: var(--text-muted); font-style: italic; }
-
         .signal-good { color: var(--accent-green); font-weight: bold; }
         .signal-warning { color: #FFC107; font-weight: bold; }
         .signal-los { color: var(--accent-red); font-weight: bold; }
-
-        /* MODAL STYLES */
         #modal-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background-color: rgba(0, 0, 0, 0.7); z-index: 1000;
@@ -234,7 +200,7 @@
     </style>
 </head>
 <body>
-    <header><h1>UNOC - Netzwerk Visualisierung</h1></header>
+    <header><h1>UNOC - Unified NOC UI</h1></header>
 
     <div id="hud">
         <div class="hud-item"><h3>Geräte Online</h3><p id="hud-devices">...</p></div>
@@ -248,7 +214,7 @@
                 <div id="network-container"></div>
                 <div id="map-container"></div>
                 <div id="view-toggle">
-                    <button id="toggle-btn">Kartenansicht</button>
+                    <button type="button" id="toggle-btn">Kartenansicht</button>
                 </div>
             </div>
             <aside id="sidebar">
@@ -263,21 +229,22 @@
                 <div id="controls-panel" class="panel">
                     <h2>Steuerung</h2>
                     <div class="button-group">
-                        <button id="undo-btn" disabled>Undo</button>
-                        <button id="redo-btn" disabled>Redo</button>
+                        <button type="button" id="undo-btn" disabled>Undo</button>
+                        <button type="button" id="redo-btn" disabled>Redo</button>
+                        <button type="button" id="reset-highlight-btn" style="background-color: #555;">Reset Highlight</button>
                     </div>
                 </div>
                 <div id="scenario-panel" class="panel">
                     <h2>Szenarien</h2>
-                    <select id="splitter-select"></select>
-                    <button id="fiber-cut-btn">Faserschnitt simulieren</button>
+                    <select id="splitter-select" aria-label="Splitter for fiber cut scenario"></select>
+                    <button type="button" id="fiber-cut-btn">Faserschnitt simulieren</button>
                 </div>
                 <div id="snapshot-panel" class="panel">
                     <h2>Snapshots</h2>
                     <div class="input-group">
                         <input type="text" id="snapshot-name" placeholder="Snapshot-Name...">
-                        <button id="save-snapshot-btn">Speichern</button>
-                        <button id="load-snapshot-btn">Laden</button>
+                        <button type="button" id="save-snapshot-btn">Speichern</button>
+                        <button type="button" id="load-snapshot-btn">Laden</button>
                     </div>
                 </div>
             </aside>
@@ -310,12 +277,11 @@
     </div>
 
     <script>
-        // --- Globale Variablen ---
         const backendUrl = "http://127.0.0.1:5000";
         let network = null, map = null, nodes = new vis.DataSet([]), edges = new vis.DataSet([]);
         let mapMarkers = {}, mapLines = {}, currentView = 'topo', eventPollInterval = null;
+        let highlightedPath = { nodes: [], links: [] };
 
-        // --- Visuelle Stile ---
         const statusToColor = {
             online: { border: "#4CAF50", background: "#2e7d32" }, offline: { border: "#F44336", background: "#c62828" },
             maintenance: { border: "#FFC107", background: "#ffa000" }, up: { color: "#4CAF50", highlight: "#66BB6A" },
@@ -324,62 +290,49 @@
         };
         const getEdgeLeafletColor = (status) => (statusToColor[status] || { color: '#9E9E9E' }).color;
 
-        // --- Initialisierung & Datenabruf ---
+        const formatDeviceToNode = d => ({id: d.id, label: `${d.type}\n(${d.id})`, shape: 'box', borderWidth: 1, color: statusToColor[d.status], font: { color: '#ffffff' }, data: d});
+        const formatLinkToEdge = l => ({id: l.id, from: l.source, to: l.target, width: 1, color: (statusToColor[l.status] || {}).color, arrows: 'to, from', dashes: l.status === 'blocking' ? [5, 5] : false, data: l, label: l.id, font: { color: '#aaa', size: 11, align: 'top', strokeWidth: 3, strokeColor: '#1a1a1a' }});
+
         async function initialize() {
             try {
                 const response = await fetch(`${backendUrl}/api/topology`);
+                if (!response.ok) throw new Error(`Backend nicht erreichbar: ${response.statusText}`);
                 const topology = await response.json();
                 
-                initializeNetworkView(topology);
-                initializeMapView(topology);
-                
-                populateSplitterDropdown(topology.devices);
-                updateRingPanel(topology);
+                const splitterSelect = document.getElementById('splitter-select');
+                splitterSelect.innerHTML = '';
+                topology.devices.filter(d => d.type.toLowerCase() === 'splitter').forEach(d => {
+                    const option = document.createElement('option');
+                    option.value = d.id;
+                    option.textContent = d.id;
+                    splitterSelect.appendChild(option);
+                });
 
+                if (!network) {
+                    const container = document.getElementById('network-container');
+                    network = new vis.Network(container, { nodes, edges }, {});
+                }
+                if (!map) {
+                    map = L.map('map-container').setView([51.96, 7.62], 10);
+                    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                        attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 20
+                    }).addTo(map);
+                }
+
+                refreshTopologyDisplay(topology);
+                
                 if (!eventPollInterval) {
                     setupEventListeners();
                     pollForUpdates();
                     eventPollInterval = setInterval(pollForUpdates, 2500);
                 }
-            } catch (e) { console.error("Fehler bei der Initialisierung:", e); }
-        }
-
-        function initializeNetworkView(topology) {
-            nodes.clear(); edges.clear();
-            nodes.add(topology.devices.map(formatDeviceToNode));
-            edges.add(topology.links.map(formatLinkToEdge));
-            if (!network) {
+            } catch (e) { 
+                console.error("Fehler bei der Initialisierung:", e);
                 const container = document.getElementById('network-container');
-                network = new vis.Network(container, { nodes, edges }, {});
+                container.innerHTML = `<p style="color: var(--accent-red); padding: 20px;">Verbindung zum Backend fehlgeschlagen. Läuft der Server auf ${backendUrl}?</p>`;
             }
         }
-
-        function initializeMapView(topology) {
-            if (map) return;
-            map = L.map('map-container').setView([52.0, 7.5], 9);
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-                attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 20
-            }).addTo(map);
-
-            topology.devices.forEach(device => {
-                if (device.coordinates) {
-                    mapMarkers[device.id] = L.marker(device.coordinates).addTo(map)
-                        .bindPopup(`<b>${device.id}</b><br>${device.type}`);
-                }
-            });
-            topology.links.forEach(link => {
-                const source = topology.devices.find(d => d.id === link.source);
-                const target = topology.devices.find(d => d.id === link.target);
-                if (source?.coordinates && target?.coordinates) {
-                    mapLines[link.id] = L.polyline([source.coordinates, target.coordinates], { 
-                        color: getEdgeLeafletColor(link.status), weight: 3,
-                        dashArray: link.status === 'blocking' ? '5, 5' : null
-                    }).addTo(map);
-                }
-            });
-        }
-
-        // --- Update & Sync Funktionen ---
+        
         async function pollForUpdates() {
             try {
                 const [eventsRes, historyRes, statsRes, topoRes] = await Promise.all([
@@ -394,23 +347,53 @@
                 const stats = await statsRes.json();
                 const topology = await topoRes.json();
                 
-                const eventLog = document.getElementById('event-log');
-                if (eventLog.children.length === 0 || events[0] !== eventLog.children[0]?.textContent) {
-                    eventLog.innerHTML = events.map(e => `<li>${e}</li>`).join('');
-                    refreshTopologyDisplay(topology);
-                }
+                document.getElementById('event-log').innerHTML = events.map(e => `<li>${e}</li>`).join('');
                 updateHud(stats);
                 updateHistoryButtons(historyStatus);
+
+                if (highlightedPath.nodes.length === 0) {
+                    nodes.update(topology.devices.map(formatDeviceToNode));
+                    edges.update(topology.links.map(formatLinkToEdge));
+                }
+                updateRingPanel(topology);
+                syncMapWithState(topology);
             } catch (error) { console.error("Polling-Fehler:", error); }
         }
 
-        function refreshTopologyDisplay(topology) {
-            nodes.update(topology.devices.map(formatDeviceToNode));
-            edges.update(topology.links.map(formatLinkToEdge));
-            updateRingPanel(topology);
-            syncMapWithState(topology);
+        function refreshTopologyDisplay(topologyData) {
+            nodes.clear();
+            edges.clear();
+            nodes.add(topologyData.devices.map(formatDeviceToNode));
+            edges.add(topologyData.links.map(formatLinkToEdge));
+            updateRingPanel(topologyData);
+            initializeMapView(topologyData); 
         }
 
+        function initializeMapView(topology) {
+            if (map) {
+                Object.values(mapMarkers).forEach(marker => marker.remove());
+                Object.values(mapLines).forEach(line => line.remove());
+                mapMarkers = {};
+                mapLines = {};
+            }
+            topology.devices.forEach(device => {
+                if (device.coordinates) {
+                    mapMarkers[device.id] = L.marker(device.coordinates).addTo(map).bindPopup(`<b>${device.id}</b><br>${device.type}`);
+                }
+            });
+            topology.links.forEach(link => {
+                const source = topology.devices.find(d => d.id === link.source);
+                const target = topology.devices.find(d => d.id === link.target);
+                if (source?.coordinates && target?.coordinates) {
+                    mapLines[link.id] = L.polyline([source.coordinates, target.coordinates], { 
+                        color: getEdgeLeafletColor(link.status), weight: 3,
+                        dashArray: link.status === 'blocking' ? '5, 5' : null
+                    }).addTo(map);
+                }
+            });
+        }
+        
+        // KORREKTUR: Fehlende Funktion wiederhergestellt
         function syncMapWithState(topology) {
             if (!map) return;
             topology.links.forEach(link => {
@@ -423,7 +406,6 @@
             });
         }
         
-        // --- UI-Steuerung & Hilfsfunktionen ---
         function updateHud(stats) {
             document.getElementById('hud-devices').textContent = `${stats.devices_online} / ${stats.devices_total}`;
             document.getElementById('hud-links').textContent = `${stats.links_up} / ${stats.links_total}`;
@@ -454,17 +436,6 @@
             ringInfoDiv.innerHTML = html + '</table>';
         }
 
-        function populateSplitterDropdown(devices) {
-            const select = document.getElementById('splitter-select');
-            select.innerHTML = '';
-            devices.filter(d => d.type.toLowerCase() === 'splitter').forEach(d => {
-                const option = document.createElement('option');
-                option.value = d.id;
-                option.textContent = d.id;
-                select.appendChild(option);
-            });
-        }
-
         async function renderProperties(dataToShow) {
             const contentDiv = document.getElementById('properties-content');
             if (!dataToShow) {
@@ -472,32 +443,39 @@
                 return;
             }
             
-            // Bisherige Tabellenerstellung
             let table = '<table>';
             for (const [k, v] of Object.entries(dataToShow)) {
                 let displayValue = v;
                 if (k === 'coordinates' && Array.isArray(v)) displayValue = `${v[0].toFixed(4)}, ${v[1].toFixed(4)}`;
+                else if (k === 'properties') displayValue = `<pre>${JSON.stringify(v, null, 2)}</pre>`;
                 else if (typeof v === 'object' && v !== null) displayValue = JSON.stringify(v);
                 table += `<tr><th>${k}</th><td>${displayValue}</td></tr>`;
             }
+            
+            if (dataToShow.properties) {
+                const metrics = {'utilization_percent': '%', 'latency_ms': ' ms', 'jitter_ms': ' ms'};
+                for (const [metric, unit] of Object.entries(metrics)) {
+                    if (dataToShow.properties[metric] !== undefined) {
+                        const keyName = metric.replace(/_percent|_ms/g, '').replace('_', ' ');
+                        table += `<tr><th style="text-transform: capitalize;">${keyName}</th><td>${dataToShow.properties[metric]}${unit}</td></tr>`;
+                    }
+                }
+            }
+            
             table += '</table>';
             contentDiv.innerHTML = table;
             
-            // KORREKTUR: Wenn es ein ONT ist, Signalpegel abfragen und alle Fälle behandeln
             if (dataToShow.type === 'ONT') {
                 try {
                     const response = await fetch(`${backendUrl}/api/devices/${dataToShow.id}/signal`);
                     if (!response.ok) return;
                     const signalInfo = await response.json();
                     
-                    if (!signalInfo || signalInfo.status === 'NOT_APPLICABLE') {
-                        return; // Nichts tun, wenn nicht anwendbar
-                    }
+                    if (!signalInfo || signalInfo.status === 'NOT_APPLICABLE') return;
 
                     const signalRow = document.createElement('tr');
                     let signalCellHTML = '';
 
-                    // Prüfe den Status und erstelle die entsprechende Tabellenzelle
                     if (signalInfo.status === 'NO_PATH') {
                         signalCellHTML = `<td class="signal-los">${signalInfo.status} (Pfad unterbrochen)</td>`;
                     } else if (signalInfo.power_dbm !== null) {
@@ -505,7 +483,6 @@
                         signalCellHTML = `<td class="${signalStatusClass}">${signalInfo.power_dbm} dBm (${signalInfo.status})</td>`;
                     }
 
-                    // Füge die Zeile nur hinzu, wenn es Inhalt gibt
                     if (signalCellHTML) {
                         signalRow.innerHTML = `<th>Signal Level</th>${signalCellHTML}`;
                         contentDiv.querySelector('table').appendChild(signalRow);
@@ -526,10 +503,9 @@
             if (isTopo) map.invalidateSize();
         }
 
-        // --- MODAL FUNCTIONS ---
         function showModal(title, message, buttons = [{ text: 'OK', class: 'modal-btn-primary', callback: hideModal }]) {
             document.getElementById('modal-title').textContent = title;
-            document.getElementById('modal-message').innerHTML = message; // Use innerHTML to allow simple formatting
+            document.getElementById('modal-message').innerHTML = message;
             const buttonContainer = document.getElementById('modal-buttons');
             buttonContainer.innerHTML = '';
             buttons.forEach(btnInfo => {
@@ -549,33 +525,33 @@
             document.getElementById('modal-overlay').classList.add('hidden');
         }
 
-        // --- Event Listeners ---
         function setupEventListeners() {
             network.on('click', params => {
+                if (params.nodes.length === 0 && params.edges.length === 0) {
+                    setTimeout(() => resetHighlight(), 0);
+                }
                 const elementId = params.nodes[0] || params.edges[0];
                 const dataset = params.nodes.length ? nodes : edges;
-                // The 'data' property holds the original object from the topology
                 renderProperties(elementId ? dataset.get(elementId).data : null);
             });
 
             document.getElementById('toggle-btn').addEventListener('click', toggleView);
             document.getElementById('undo-btn').addEventListener('click', () => postAction('/api/simulation/undo'));
             document.getElementById('redo-btn').addEventListener('click', () => postAction('/api/simulation/redo'));
+            document.getElementById('reset-highlight-btn').addEventListener('click', resetHighlight);
             document.getElementById('fiber-cut-btn').addEventListener('click', simulateFiberCut);
             document.getElementById('save-snapshot-btn').addEventListener('click', saveSnapshot);
             document.getElementById('load-snapshot-btn').addEventListener('click', loadSnapshot);
             
-            // CLI Listeners
             document.getElementById('cli-input').addEventListener('keydown', handleCliKeyDown);
             document.getElementById('cli-input').addEventListener('keyup', debounce(handleAutocomplete, 250));
-            document.addEventListener('click', (e) => { // Hide suggestions if clicking outside
+            document.addEventListener('click', (e) => {
                 if (!document.getElementById('cli-interaction-area').contains(e.target)) {
                     clearSuggestions();
                 }
             });
         }
 
-        // --- Aktionen (POST-Requests) ---
         async function postAction(endpoint, payload = {}) {
             try {
                 const res = await fetch(`${backendUrl}${endpoint}`, {
@@ -586,7 +562,6 @@
                     const errorData = await res.json();
                     throw new Error(errorData.description || "Unbekannter Backend-Fehler");
                 }
-                // For load snapshot, we need a full re-initialization
                 if (endpoint.includes('load')) {
                    await initialize();
                 } else {
@@ -616,14 +591,13 @@
         function loadSnapshot() {
             const name = document.getElementById('snapshot-name').value.trim();
             if (name) {
-                showModal('Snapshot laden', `Soll der Snapshot '<strong>${name}</strong>' wirklich geladen werden? Alle ungespeicherten Änderungen gehen verloren.`,
+                showModal('Snapshot laden', `Soll der Snapshot '<strong>${name}</strong>' wirklich geladen werden?`,
                     [{ text: 'Abbrechen', class: 'modal-btn-secondary' }, { text: 'Laden', class: 'modal-btn-primary', callback: () => postAction('/api/snapshot/load', { name }) }]
                 );
             } else showModal('Fehler', 'Bitte den Namen des zu ladenden Snapshots eingeben.');
         }
 
-        // --- CLI & Autocomplete Logic ---
-        const KNOWN_COMMANDS = ['help', 'undo', 'redo', 'cut', 'fiber-cut', 'link-down', 'link-up', 'link-degraded'];
+        const KNOWN_COMMANDS = ['help', 'undo', 'redo', 'cut', 'fiber-cut', 'link-down', 'link-up', 'link-degraded', 'trace'];
         
         function debounce(func, delay) {
             let timeout;
@@ -631,6 +605,99 @@
                 clearTimeout(timeout);
                 timeout = setTimeout(() => func.apply(this, args), delay);
             };
+        }
+        
+        function showCliOutput(message, type = 'info') {
+            const cliOutput = document.getElementById('cli-output');
+            const colorMap = { error: 'var(--accent-red)', warning: '#FFC107', info: 'var(--text-color)' };
+            cliOutput.innerHTML += `<div>${message}</div>`;
+            cliOutput.querySelector('div:last-child').style.color = colorMap[type] || colorMap.info;
+            cliOutput.scrollTop = cliOutput.scrollHeight;
+        }
+
+        async function handleCliCommand(inputElement) {
+            const commandStr = inputElement.value.trim();
+            if (!commandStr) return;
+            
+            showCliOutput(`<span style="color: var(--text-muted);">UNOC></span> ${commandStr}`);
+            const [command, ...args] = commandStr.split(' ');
+            
+            inputElement.value = '';
+            clearSuggestions();
+
+            if (command === 'trace') {
+                await tracePath(args[0], args[1]);
+                return;
+            }
+            if (command === "help") {
+                showCliOutput(`Verfügbare Befehle: ${KNOWN_COMMANDS.join(', ')}`, 'info');
+            } else if (command === "undo") {
+                await postAction('/api/simulation/undo');
+            } else if (command === "redo") {
+                await postAction('/api/simulation/redo');
+            } else if (command === "cut" || command === "fiber-cut") {
+                await postAction('/api/simulation/fiber-cut', { node_id: args[0] });
+            } else if (["link-down", "link-up", "link-degraded"].includes(command)) {
+                await postAction(`/api/links/${args[0]}/status`, { status: command.split("-")[1] });
+            } else {
+                showCliOutput(`Unbekannter Befehl: '${command}'.`, 'error');
+            }
+        }
+
+        async function tracePath(startNode, endNode) {
+            resetHighlight();
+            if (!startNode || !endNode) {
+                showCliOutput("Fehler: `trace` benötigt Start- und Endknoten. Bsp: trace NODE-A NODE-B", 'error');
+                return;
+            }
+            try {
+                const response = await fetch(`${backendUrl}/api/simulation/trace-path`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ start_node: startNode, end_node: endNode })
+                });
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.description || "Unbekannter Fehler bei der Pfadsuche");
+                }
+                const path = await response.json();
+                
+                if (path.nodes.length === 0) {
+                    showCliOutput(`Kein aktiver Pfad zwischen ${startNode} und ${endNode} gefunden.`, 'warning');
+                } else {
+                    highlightedPath = { nodes: path.nodes, links: path.links };
+                    nodes.update(path.nodes.map(id => ({ id, borderWidth: 3, color: { border: '#00BFFF' } })));
+                    edges.update(path.links.map(id => ({ id, width: 4, color: '#00BFFF' })));
+                    showCliOutput(`Pfad gefunden: ${path.nodes.join(' -> ')}`);
+                }
+            } catch (e) {
+                showCliOutput(`Fehler bei der Pfadverfolgung: ${e.message}`, 'error');
+            }
+        }
+        
+        function resetHighlight() {
+            if (highlightedPath.nodes.length === 0 && highlightedPath.links.length === 0) return;
+            
+            const nodesToUpdate = nodes.get(highlightedPath.nodes);
+            const edgesToUpdate = edges.get(highlightedPath.links);
+
+            if (nodesToUpdate.length > 0) {
+                const nodeResets = nodesToUpdate.map(node => {
+                    const defaultStyle = formatDeviceToNode(node.data);
+                    return { id: node.id, borderWidth: defaultStyle.borderWidth, color: defaultStyle.color };
+                });
+                nodes.update(nodeResets);
+            }
+
+            if (edgesToUpdate.length > 0) {
+                const edgeResets = edgesToUpdate.map(edge => {
+                    const defaultStyle = formatLinkToEdge(edge.data);
+                    return { id: edge.id, width: defaultStyle.width, color: defaultStyle.color };
+                });
+                edges.update(edgeResets);
+            }
+
+            highlightedPath = { nodes: [], links: [] };
         }
 
         function handleCliKeyDown(event) {
@@ -661,81 +728,42 @@
                 clearSuggestions();
             }
         }
-        
-        function handleCliCommand(inputElement) {
-            const commandStr = inputElement.value.trim();
-            if (!commandStr) return;
-            
-            const cliOutput = document.getElementById('cli-output');
-            cliOutput.innerHTML += `<div><span style="color: var(--text-muted);">UNOC></span> ${commandStr}</div>`;
-            
-            const [command, ...args] = commandStr.split(' ');
-            const arg = args.join(' ');
-
-            if (command === "help") {
-                const helpText = `
-                    <div style="color: var(--accent-color);">Verfügbare Befehle:</div>
-                    ${KNOWN_COMMANDS.map(c => `<div><strong>${c}</strong></div>`).join('')}
-                `;
-                cliOutput.innerHTML += helpText;
-            } else if (command === "undo") postAction('/api/simulation/undo');
-            else if (command === "redo") postAction('/api/simulation/redo');
-            else if (command === "cut" || command === "fiber-cut") postAction('/api/simulation/fiber-cut', { node_id: arg });
-            else if (command.startsWith("link-")) postAction(`/api/links/${arg}/status`, { status: command.split("-")[1] });
-            else cliOutput.innerHTML += `<div style="color: var(--accent-red);">Unbekannter Befehl: '${command}'. Geben Sie 'help' ein für eine Liste der Befehle.</div>`;
-            
-            cliOutput.scrollTop = cliOutput.scrollHeight;
-            inputElement.value = '';
-            clearSuggestions();
-        }
 
         function handleAutocomplete(event) {
             const inputElement = event.target;
             const text = inputElement.value;
-            const parts = text.trim().split(' ');
-            
-            if (['Enter', 'Escape', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
-                if(event.key !== 'ArrowUp' && event.key !== 'ArrowDown') clearSuggestions();
+            const parts = text.split(' ');
+            const command = parts[0];
+            const currentPartIndex = parts.length - 1;
+            const partial = parts[currentPartIndex];
+
+            if (currentPartIndex === 0) {
+                const suggestions = KNOWN_COMMANDS.filter(c => c.startsWith(partial));
+                renderSuggestions(suggestions, "");
                 return;
             }
-            
-            if (parts.length === 1 && !text.endsWith(' ')) {
-                const partialCommand = parts[0];
-                if(partialCommand === '') {
-                    clearSuggestions();
-                    return;
-                }
-                const suggestions = KNOWN_COMMANDS.filter(c => c.startsWith(partialCommand));
-                renderSuggestions(suggestions, '');
-            } else if (parts.length >= 1 && text.endsWith(' ')) {
-                 const command = parts[0];
-                 let suggestions = [];
-                 const commandsWithLinkIds = ['link-down', 'link-up', 'link-degraded'];
-                 const commandsWithNodeIds = ['cut', 'fiber-cut'];
-                 if (commandsWithLinkIds.includes(command)) {
-                     suggestions = edges.get().map(item => item.id);
-                 } else if (commandsWithNodeIds.includes(command)) {
-                     suggestions = nodes.get().map(item => item.id);
-                 }
-                 renderSuggestions(suggestions, command);
-            } else if (parts.length >= 2) {
-                const command = parts[0];
-                const partialId = parts[parts.length - 1];
-                let suggestions = [];
-                const commandsWithLinkIds = ['link-down', 'link-up', 'link-degraded'];
-                const commandsWithNodeIds = ['cut', 'fiber-cut'];
 
-                if (commandsWithLinkIds.includes(command)) {
-                    suggestions = edges.get({ filter: item => item.id.toLowerCase().startsWith(partialId.toLowerCase()) }).map(item => item.id);
-                } else if (commandsWithNodeIds.includes(command)) {
-                    suggestions = nodes.get({ filter: item => item.id.toLowerCase().startsWith(partialId.toLowerCase()) }).map(item => item.id);
+            const baseCommand = parts.slice(0, currentPartIndex).join(' ');
+            let suggestions = [];
+
+            const commandsWithNodeIds = ['cut', 'fiber-cut', 'trace'];
+            const commandsWithLinkIds = ['link-down', 'link-up', 'link-degraded'];
+
+            if (commandsWithLinkIds.includes(command)) {
+                if (currentPartIndex === 1) {
+                    suggestions = edges.get({ filter: item => item.id.toLowerCase().startsWith(partial.toLowerCase()) }).map(item => item.id);
                 }
-                renderSuggestions(suggestions, command);
-            } else {
-                clearSuggestions();
+            } else if (commandsWithNodeIds.includes(command)) {
+                if (currentPartIndex === 1 || (command === 'trace' && currentPartIndex === 2)) {
+                    const existingNodes = parts.slice(1, currentPartIndex);
+                    suggestions = nodes.get({ 
+                        filter: item => !existingNodes.includes(item.id) && item.id.toLowerCase().startsWith(partial.toLowerCase()) 
+                    }).map(item => item.id);
+                }
             }
+            renderSuggestions(suggestions, baseCommand);
         }
-
+        
         function renderSuggestions(suggestions, baseCommand) {
             const container = document.getElementById('cli-suggestions');
             if (suggestions.length === 0) {
@@ -747,18 +775,15 @@
 
         function selectSuggestion(baseCommand, id) {
             const inputElement = document.getElementById('cli-input');
-            inputElement.value = `${baseCommand} ${id}`.trim() + ' ';
-            clearSuggestions();
+            inputElement.value = (baseCommand ? `${baseCommand} ` : '') + `${id} `;
             inputElement.focus();
+            
+            inputElement.dispatchEvent(new Event('keyup', { bubbles: true }));
         }
-        
+
         function clearSuggestions() {
             document.getElementById('cli-suggestions').innerHTML = '';
         }
-
-        // --- Hilfsfunktionen ---
-        const formatDeviceToNode = d => ({id: d.id, label: `${d.type}\n(${d.id})`, shape: 'box', color: statusToColor[d.status], font: { color: '#ffffff' }, data: d});
-        const formatLinkToEdge = l => ({id: l.id, from: l.source, to: l.target, color: statusToColor[l.status], arrows: 'to, from', dashes: l.status === 'blocking' ? [5, 5] : false, data: l, label: l.id, font: { color: '#aaa', size: 11, align: 'top', strokeWidth: 3, strokeColor: '#1a1a1a' }});
 
         document.addEventListener('DOMContentLoaded', initialize);
     </script>

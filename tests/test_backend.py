@@ -71,14 +71,12 @@ def test_get_events_initial(client):
     assert response.status_code == 200
     events = response.get_json()
     assert isinstance(events, list)
-    # Akzeptiere beliebige Ringnamen und -links, prüfe nur auf ERPS + BLOCKING irgendwo im Log
     assert any("set to BLOCKING" in e and "ERPS" in e for e in events) or \
            any("rings initialized" in e for e in events)
 
 def test_snapshot_cycle(client):
     snapshot_name = "test_run_1"
 
-    # Wähle einen Link dynamisch aus
     topo = client.get('/api/topology').get_json()
     target_link = next((l['id'] for l in topo['links'] if l['status'] == 'up'), None)
     assert target_link is not None
@@ -144,15 +142,12 @@ def test_fiber_cut_scenario(client):
     assert response.status_code == 200
 
     topo_after_cut = client.get('/api/topology').get_json()
-    # Suche ONTs dynamisch, die via Splitter angebunden sind
     onts = [d for d in topo_after_cut['devices'] if d['id'].startswith('ONT')]
     assert onts, "Keine ONTs gefunden"
-    # Prüfe nur ONTs, die mit dem Splitter verbunden sind!
     for ont in onts:
         if any(l['source'] == splitter_id and l['target'] == ont['id'] for l in topo_after_cut['links']):
             assert ont['status'] == 'offline'
 
-    # Prüfe: Es gibt mindestens einen Link ab Splitter, der down ist
     affected_links = [l for l in topo_after_cut['links'] if l['source'] == splitter_id or l['target'] == splitter_id]
     assert any(l['status'] == 'down' for l in affected_links)
 
@@ -160,8 +155,6 @@ def test_fiber_cut_scenario(client):
     assert undo_resp.status_code == 200
 
     topo_after_undo = client.get('/api/topology').get_json()
-    # After undo, the state should be exactly as before the fiber cut.
-    # We find the original devices and links from the base topology to check their status.
     original_onts = [d for d in BASE_TOPOLOGY.devices if d.id in [o['id'] for o in onts]]
     for original_ont in original_onts:
          restored_ont = next(ont for ont in topo_after_undo['devices'] if ont['id'] == original_ont.id)
@@ -176,23 +169,19 @@ def test_get_topology_stats(client):
     """
     Tests the statistics calculation endpoint (dynamisch).
     """
-    # 1. Hole initiale Stats
     response1 = client.get('/api/topology/stats')
     assert response1.status_code == 200
     stats1 = response1.get_json()
 
-    # Prüfe nur die Logik, nicht feste Werte!
     assert stats1['devices_online'] <= stats1['devices_total']
     assert stats1['links_up'] <= stats1['links_total']
 
-    # Berechne alarms dynamisch wie das Backend!
     response_full = client.get('/api/topology')
     topo = response_full.get_json()
     expected_device_alarms = stats1['devices_total'] - stats1['devices_online']
     expected_link_alarms = sum(1 for l in topo['links'] if l['status'] not in ['up', 'blocking'])
     assert stats1['alarms'] == expected_device_alarms + expected_link_alarms
 
-    # 2. Nimm einen aktiven Link, setze ihn auf down, prüfe Auswirkungen
     up_link = next((l['id'] for l in topo['links'] if l['status'] == 'up'), None)
     assert up_link, "Es muss mindestens einen aktiven Link geben"
     
@@ -201,7 +190,6 @@ def test_get_topology_stats(client):
     stats2 = response2.get_json()
 
     assert stats2['links_up'] == stats1['links_up'] - 1
-    # Neu berechnen!
     response_full2 = client.get('/api/topology')
     topo2 = response_full2.get_json()
     expected_device_alarms2 = stats2['devices_total'] - stats2['devices_online']
@@ -212,14 +200,13 @@ def test_erps_failover_scenario(client):
     """
     Tests the ERPS failover logic (dynamisch!).
     """
-    # Suche einen Ring mit RPL-Link und einen beliebigen Nicht-RPL-Link im Ring
     topo1 = client.get('/api/topology').get_json()
     assert 'rings' in topo1 and len(topo1['rings']) > 0, "Kein Ring in der Topologie definiert."
     ring = topo1['rings'][0]
-    rpl_link = ring['rpl_link_id']
-    # Finde ein Link im Ring, der nicht der RPL ist und aktuell up ist
+    rpl_link_id = ring['rpl_link_id']
+    
     ring_links_ids = [l['id'] for l in topo1['links']
-                  if l['source'] in ring['nodes'] and l['target'] in ring['nodes'] and l['id'] != rpl_link]
+                  if l['source'] in ring['nodes'] and l['target'] in ring['nodes'] and l['id'] != rpl_link_id]
     
     link_to_break = None
     for link_id in ring_links_ids:
@@ -230,24 +217,19 @@ def test_erps_failover_scenario(client):
 
     assert link_to_break, "Kein 'up'-Link im Ring gefunden, um einen Failover zu testen."
     
-    # 1. Verify initial state: RPL should be blocking
-    assert next(l for l in topo1['links'] if l['id'] == rpl_link)['status'] == 'blocking'
+    assert next(l for l in topo1['links'] if l['id'] == rpl_link_id)['status'] == 'blocking'
 
-    # 2. Break an active link in the ring
     client.post(f'/api/links/{link_to_break}/status', json={"status": "down"})
 
-    # 3. Verify failover: The broken link is down, and the RPL is now up
     topo2 = client.get('/api/topology').get_json()
     assert next(l for l in topo2['links'] if l['id'] == link_to_break)['status'] == 'down'
-    assert next(l for l in topo2['links'] if l['id'] == rpl_link)['status'] == 'up'
+    assert next(l for l in topo2['links'] if l['id'] == rpl_link_id)['status'] == 'up'
 
-    # 4. Undo the entire operation
     client.post('/api/simulation/undo')
 
-    # 5. Verify restored state: Broken link is up again, RPL is blocking again
     topo3 = client.get('/api/topology').get_json()
     assert next(l for l in topo3['links'] if l['id'] == link_to_break)['status'] == 'up'
-    assert next(l for l in topo3['links'] if l['id'] == rpl_link)['status'] == 'blocking'
+    assert next(l for l in topo3['links'] if l['id'] == rpl_link_id)['status'] == 'blocking'
 
 def test_optical_power_calculation(client):
     """
@@ -255,8 +237,6 @@ def test_optical_power_calculation(client):
     """
     ont_id = "ONT-KUNDE-123"
     
-    # Manuelle Berechnung basierend auf topology.yml
-    # OLT-MST-01 (4.0 dBm) -> link-02 (2.5km) -> SPLITTER-01 (10.5 dB) -> link-03 (0.8km) -> ONT
     tx_power = 4.0
     link2_loss = 2.5 * 0.35 # FIBER_LOSS_PER_KM
     link3_loss = 0.8 * 0.35
@@ -268,5 +248,28 @@ def test_optical_power_calculation(client):
     data = response.get_json()
     
     assert data['status'] == 'GOOD'
-    # pytest.approx wird für Fließkommavergleiche verwendet
     assert data['power_dbm'] == pytest.approx(expected_power, abs=0.01)
+
+def test_trace_path(client):
+    """
+    Tests the path tracing functionality before and after a failover.
+    """
+    # 1. Trace path im Normalzustand
+    payload1 = {"start_node": "AGG-MST-01", "end_node": "AGG-RHE-01"}
+    response1 = client.post('/api/simulation/trace-path', json=payload1)
+    assert response1.status_code == 200
+    path1 = response1.get_json()
+    assert path1['nodes'] == ["AGG-MST-01", "AGG-COE-01", "AGG-RHE-01"]
+    assert "link-mst-coe" in path1['links']
+    assert "link-coe-rhe" in path1['links']
+
+    # 2. Simuliere einen Link-Ausfall im Ring
+    client.post('/api/links/link-mst-coe/status', json={"status": "down"})
+
+    # 3. Trace den Pfad erneut, er muss jetzt über den RPL gehen
+    response2 = client.post('/api/simulation/trace-path', json=payload1)
+    assert response2.status_code == 200
+    path2 = response2.get_json()
+    # Der Pfad ist jetzt der umgekehrte Weg über den vormals blockierten Link
+    assert path2['nodes'] == ["AGG-MST-01", "AGG-RHE-01"]
+    assert "link-rhe-mst" in path2['links']
