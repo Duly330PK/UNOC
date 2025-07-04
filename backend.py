@@ -19,7 +19,7 @@ from sqlalchemy.exc import NoResultFound
 from sqlalchemy.orm import Session as DBSessionType # Importieren für Typ-Annotation
 
 # Importiere Datenbank-Module und ORM-Modelle
-from database import SessionLocal, init_db, Device, Link, Ring 
+from database import SessionLocal, init_db, Device, Link, Ring, Alarm 
 
 # Importiere die angepassten Command-Klassen
 from commands import (
@@ -189,19 +189,34 @@ def build_graph_from_db(db_session: DBSessionType):
 # --- Realtime WebSocket Emitting (Angepasst) ---
 
 def emit_full_state_updates(db_session: DBSessionType): 
-    """Emits the full topology, stats, and history status. Designed to be called within a request context."""
+    """Emits the full topology, stats, alarms, and history status."""
     full_topology = serialize_topology(db_session)
     stats = get_current_topology_stats(db_session)
     history_status = get_current_history_status()
 
-    socketio.emit('initial_topology', {
+    # --- Alarme serialisieren ---
+    active_alarms = db_session.query(Alarm).filter_by(status='ACTIVE').all()
+    serialized_alarms = [
+        {
+            "id": alarm.id,
+            "severity": alarm.severity,
+            "status": alarm.status,
+            "timestamp_raised": alarm.timestamp_raised,
+            "affected_object_type": alarm.affected_object_type,
+            "affected_object_id": alarm.affected_object_id,
+            "description": alarm.description
+        }
+        for alarm in active_alarms
+    ]
+
+    socketio.emit('full_state_update', {
         'devices': full_topology['devices'],
         'links': full_topology['links'],
         'rings': full_topology['rings'],
         'stats': stats,
-        'history_status': history_status
+        'history_status': history_status,
+        'alarms': serialized_alarms  # NEU!
     })
-
 
 def emit_stats_update(db_session: DBSessionType): 
     stats = get_current_topology_stats(db_session)
@@ -287,7 +302,76 @@ def handle_ring_failure(db_session: DBSessionType, broken_link_id_str: str):
         return failover_command
     return None
 
-# --- Berechnungslogik (Angepasst an DB-Objekte) ---
+def check_thresholds_and_update_alarms(db, updated_object, **kwargs):
+    """
+    Prüft, ob ein geändertes Objekt Schwellenwerte überschreitet und erstellt/löscht entsprechende Alarme.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    alarm_changed = False
+
+    # Link: Auslastung
+    if isinstance(updated_object, Link):
+        utilization = updated_object.properties.get('utilization_percent', 0)
+        existing_alarm = db.query(Alarm).filter_by(
+            affected_object_id=updated_object.link_id_str,
+            affected_object_type="link",
+            description="High Utilization",
+            status="ACTIVE"
+        ).first()
+
+        # Trigger-Alarm
+        if utilization > 80 and not existing_alarm:
+            new_alarm = Alarm(
+                severity="WARNING",
+                status="ACTIVE",
+                timestamp_raised=now,
+                timestamp_cleared=None,
+                affected_object_type="link",
+                affected_object_id=updated_object.link_id_str,
+                description="High Utilization"
+            )
+            db.add(new_alarm)
+            alarm_changed = True
+
+        # Cleare Alarm
+        elif utilization <= 80 and existing_alarm:
+            existing_alarm.status = "CLEARED"
+            existing_alarm.timestamp_cleared = now
+            alarm_changed = True
+
+    # Device: ONT - Loss of Signal (LOS)
+    if isinstance(updated_object, Device) and updated_object.type == "ONT":
+        signal_status = kwargs.get("signal_status")  # Übergeben von calculate_ont_power
+        existing_alarm = db.query(Alarm).filter_by(
+            affected_object_id=updated_object.device_id_str,
+            affected_object_type="device",
+            description="Loss of Signal",
+            status="ACTIVE"
+        ).first()
+
+        if signal_status == "LOS" and not existing_alarm:
+            new_alarm = Alarm(
+                severity="CRITICAL",
+                status="ACTIVE",
+                timestamp_raised=now,
+                timestamp_cleared=None,
+                affected_object_type="device",
+                affected_object_id=updated_object.device_id_str,
+                description="Loss of Signal"
+            )
+            db.add(new_alarm)
+            alarm_changed = True
+
+        elif signal_status != "LOS" and existing_alarm:
+            existing_alarm.status = "CLEARED"
+            existing_alarm.timestamp_cleared = now
+            alarm_changed = True
+
+    if alarm_changed:
+        db.commit()
+        emit_full_state_updates(db)  # Push sofort neue Alarmliste!
+
+
 def calculate_ont_power(db_session: DBSessionType, ont_id_str: str): 
     """
     Calculates the received optical power at a specific ONT.
@@ -324,7 +408,6 @@ def calculate_ont_power(db_session: DBSessionType, ont_id_str: str):
             if link_from_db:
                 path_links_db_obj.append(link_from_db)
 
-
     for device in path_devices_db_obj[1:]: 
         if device.status == 'offline':
             return {"status": "NO_PATH", "power_dbm": None, "reason": f"Device {device.device_id_str} is offline"}
@@ -353,8 +436,12 @@ def calculate_ont_power(db_session: DBSessionType, ont_id_str: str):
     else:
         signal_status = "LOS"
 
-    return {"status": signal_status, "power_dbm": round(received_power, 2)}
+    # --------- NEU: Alarmlogik aufrufen! ---------
+    ont_device = db_session.query(Device).filter_by(device_id_str=ont_id_str).first()
+    check_thresholds_and_update_alarms(db_session, ont_device, signal_status=signal_status)
+    # ---------------------------------------------
 
+    return {"status": signal_status, "power_dbm": round(received_power, 2)}
 
 # --- API Endpoints (Angepasst an DB & WebSockets) ---
 @app.route('/api/topology', methods=['GET'])
@@ -427,6 +514,36 @@ def get_device_signal(device_id_str: str):
     build_graph_from_db(db) 
     signal_info = calculate_ont_power(db, device_id_str)
     return jsonify(signal_info)
+
+@app.route('/api/links/<string:link_id_str>/utilization', methods=['POST'])
+def set_link_utilization(link_id_str: str):
+    db = g.db
+    payload = request.get_json()
+    utilization = payload.get('utilization')
+    if utilization is None or not isinstance(utilization, (int, float)):
+        abort(400, description="Missing or invalid 'utilization' value.")
+    if not (0 <= utilization <= 100):
+        abort(400, description="'utilization' must be between 0 and 100.")
+
+    link = db.query(Link).filter_by(link_id_str=link_id_str).first()
+    if not link:
+        abort(404, description=f"Link with ID '{link_id_str}' not found.")
+
+    # Update utilization_percent im Link-Objekt
+    props = link.properties or {}
+    props['utilization_percent'] = utilization
+    link.properties = props
+    db.add(link)
+
+    # --- Alarmlogik triggern ---
+    check_thresholds_and_update_alarms(db, link)
+
+    db.commit()
+    add_event(f"LINK-UTIL: Utilization of link '{link_id_str}' set to {utilization}%.")
+
+    # WebSocket-Update (Full State)
+    emit_full_state_updates(db)
+    return jsonify({"message": f"Utilization of link '{link_id_str}' set to {utilization}%."})
 
 @app.route('/api/simulation/trace-path', methods=['POST'])
 def trace_path():

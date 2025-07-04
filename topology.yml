@@ -1,6 +1,3 @@
-#
-# UNOC - topology.yml (v3 mit Link-Metriken)
-#
 version: "1.0.0"
 
 devices:
@@ -9,37 +6,60 @@ devices:
     status: online
     properties:
       name: "OLT-Muenster-01"
-      transmit_power_dbm: 4.0 # NEU: Sendeleistung in dBm
+      transmit_power_dbm: 4.0
     coordinates: [51.960, 7.625]
+
   - id: AGG-MST-01
     type: Aggregation Switch
     status: online
     properties: { "name": "Aggregation-Muenster-01" }
     coordinates: [51.962, 7.628]
+
   - id: AGG-COE-01
     type: Aggregation Switch
     status: online
     properties: { "name": "Aggregation-Coesfeld-01" }
     coordinates: [51.945, 7.165]
+
   - id: AGG-RHE-01
     type: Aggregation Switch
     status: online
     properties: { "name": "Aggregation-Rheine-01" }
     coordinates: [52.280, 7.435]
+
   - id: SPLITTER-01
     type: Splitter
     status: online
     properties:
       ratio: "1:16"
-      insertion_loss_db: 10.5 # NEU: Dämpfung für einen 1:16 Splitter (realistischer Wert)
+      insertion_loss_db: 30.5
+
+  - id: SPLITTER-02
+    type: Splitter
+    status: online
+    properties:
+      ratio: "1:4"
+      insertion_loss_db: 7.2
+
   - id: ONT-KUNDE-123
     type: ONT
     status: online
     properties: { customer_id: 4711, vlan: 101 }
+
   - id: ONT-KUNDE-124
     type: ONT
     status: offline
     properties: { customer_id: 4712, vlan: 102 }
+
+  - id: ONT-KUNDE-125
+    type: ONT
+    status: online
+    properties: { customer_id: 4713, vlan: 103 }
+
+  - id: ONT-KUNDE-126
+    type: ONT
+    status: online
+    properties: { customer_id: 4714, vlan: 104 }
 
 links:
   - id: link-01
@@ -48,9 +68,10 @@ links:
     status: up
     properties:
       type: fiber-10G
-      utilization_percent: 65.0     # Mittlere Auslastung
+      utilization_percent: 65.0
       latency_ms: 0.5
       jitter_ms: 0.1
+
   - id: link-02
     source: OLT-MST-01
     target: SPLITTER-01
@@ -58,7 +79,8 @@ links:
     properties:
       type: fiber
       length_km: 2.5
-      utilization_percent: 30.0     # Niedrige Auslastung
+      utilization_percent: 30.0
+
   - id: link-03
     source: SPLITTER-01
     target: ONT-KUNDE-123
@@ -66,6 +88,7 @@ links:
     properties:
       type: fiber
       length_km: 0.8
+
   - id: link-04
     source: SPLITTER-01
     target: ONT-KUNDE-124
@@ -73,31 +96,58 @@ links:
     properties:
       type: fiber
       length_km: 1.2
+
+  - id: link-05
+    source: SPLITTER-01
+    target: SPLITTER-02
+    status: up
+    properties:
+      type: fiber
+      length_km: 0.6
+
+  - id: link-06
+    source: SPLITTER-02
+    target: ONT-KUNDE-125
+    status: up
+    properties:
+      type: fiber
+      length_km: 0.4
+
+  - id: link-07
+    source: SPLITTER-02
+    target: ONT-KUNDE-126
+    status: up
+    properties:
+      type: fiber
+      length_km: 0.5
+
   - id: link-mst-coe
     source: AGG-MST-01
     target: AGG-COE-01
     status: up
     properties:
       type: fiber-10G
-      utilization_percent: 85.0     # Hohe Auslastung -> wird rot!
+      utilization_percent: 85.0
       latency_ms: 1.8
       jitter_ms: 0.9
+
   - id: link-coe-rhe
     source: AGG-COE-01
     target: AGG-RHE-01
     status: up
     properties:
       type: fiber-10G
-      utilization_percent: 40.0     # Niedrige Auslastung
+      utilization_percent: 40.0
       latency_ms: 2.1
       jitter_ms: 0.2
+
   - id: link-rhe-mst
     source: AGG-RHE-01
     target: AGG-MST-01
     status: up
     properties:
       type: fiber-10G
-      utilization_percent: 5.0      # Sehr niedrig, da RPL
+      utilization_percent: 5.0
       latency_ms: 3.5
       jitter_ms: 0.1
 

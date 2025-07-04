@@ -33,7 +33,13 @@ class Device(Base):
     type = Column(String, nullable=False)
     status = Column(String, default="online")
     properties = Column(JSON, default={})
-    coordinates = Column(JSON) # Speichert [lat, lon]
+    coordinates = Column(JSON)  # Speichert [lat, lon]
+
+    # Neue mögliche Felder in properties z. B.:
+    # - splicing_count
+    # - insertion_loss
+    # - model
+    # - firmware_version
 
     links_as_source = relationship("Link", foreign_keys="[Link.source_id]")
     links_as_target = relationship("Link", foreign_keys="[Link.target_id]")
@@ -47,6 +53,12 @@ class Link(Base):
     status = Column(String, default="up")
     properties = Column(JSON, default={})
 
+    # Neue mögliche Felder in properties z. B.:
+    # - attenuation_db_per_km
+    # - total_loss_db
+    # - fiber_type
+    # - length_km
+
     source = relationship("Device", foreign_keys=[source_id])
     target = relationship("Device", foreign_keys=[target_id])
 
@@ -58,6 +70,17 @@ class Ring(Base):
     rpl_link_id_str = Column(String, nullable=False)
     
     nodes = relationship("Device", secondary=ring_device_association)
+
+class Alarm(Base):
+    __tablename__ = "alarms"
+    id = Column(Integer, primary_key=True, index=True)
+    severity = Column(String, nullable=False)  # CRITICAL, MAJOR, MINOR, WARNING
+    status = Column(String, nullable=False)    # ACTIVE, ACKNOWLEDGED, CLEARED
+    timestamp_raised = Column(String, nullable=False)
+    timestamp_cleared = Column(String)
+    affected_object_type = Column(String)  # 'device' oder 'link'
+    affected_object_id = Column(String)
+    description = Column(String)
 
 def init_db():
     """Erstellt alle Tabellen in der Datenbank."""

@@ -2,26 +2,31 @@
 # UNOC - seed.py
 #
 # Liest die topology.yml und befüllt die PostgreSQL-Datenbank.
-# Dieses Skript sollte nur einmal oder nach einem Zurücksetzen der DB ausgeführt werden.
+# Immer als "harter Reset": Vorher wird alles gelöscht!
 #
 
 import yaml
+from sqlalchemy import text
 from database import SessionLocal, init_db, Device, Link, Ring
 
 def seed_database():
     db = SessionLocal()
-    
-    # Prüfen, ob bereits Daten vorhanden sind
-    if db.query(Device).count() > 0:
-        print("Datenbank enthält bereits Daten. Seeding wird übersprungen.")
-        return
 
-    print("Datenbank ist leer. Starte Seeding aus topology.yml...")
-    
+    # --- ALLES LÖSCHEN ---
+    print("Lösche alte Daten (Devices, Links, Rings, Zwischentabelle)...")
+    # Reihenfolge wichtig wegen Foreign Keys!
+    db.execute(text("DELETE FROM ring_device_association"))  # Zwischentabelle zuerst
+    db.query(Link).delete()
+    db.query(Ring).delete()
+    db.query(Device).delete()
+    db.commit()
+
+    print("Importiere Daten aus topology.yml...")
+
     with open("topology.yml", 'r') as f:
         data = yaml.safe_load(f)
 
-    # 1. Geräte erstellen und in einer Map für schnellen Zugriff speichern
+    # 1. Geräte erstellen
     device_map = {}
     for device_data in data['devices']:
         new_device = Device(
@@ -33,9 +38,9 @@ def seed_database():
         )
         db.add(new_device)
         device_map[device_data['id']] = new_device
-    db.commit() # Commit, um IDs zu generieren
+    db.commit()
 
-    # 2. Links erstellen, die auf die Geräte verweisen
+    # 2. Links erstellen
     for link_data in data['links']:
         source_device = device_map[link_data['source']]
         target_device = device_map[link_data['target']]

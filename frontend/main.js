@@ -6,8 +6,10 @@
 const backendUrl = "http://127.0.0.1:5000";
 let socket = null; // NEU: WebSocket-Instanz
 let network = null, map = null, nodes = new vis.DataSet([]), edges = new vis.DataSet([]);
-let mapMarkers = {}, mapLines = {}, currentView = 'topo', eventPollInterval = null; // eventPollInterval wird nicht mehr genutzt, aber bleibt zur Klarheit hier
+let mapMarkers = {}, mapLines = {}, currentView = 'topo', eventPollInterval = null;
 let highlightedPath = { nodes: [], links: [] };
+let selectedId = null;
+let selectedType = null; // 'device' oder 'link'
 
 const statusToColor = {
     online: { border: "#4CAF50", background: "#2e7d32" }, offline: { border: "#F44336", background: "#c62828" },
@@ -17,10 +19,28 @@ const statusToColor = {
 };
 const getEdgeLeafletColor = (status) => (statusToColor[status] || { color: '#9E9E9E' }).color;
 
-// Angepasste formatDeviceToNode und formatLinkToEdge, um die '_str' IDs aus dem Backend zu verwenden
-const formatDeviceToNode = d => ({id: d.device_id_str, label: `${d.type}\n(${d.device_id_str})`, shape: 'box', borderWidth: 1, color: statusToColor[d.status], font: { color: '#ffffff' }, data: d});
-// l.source und l.target sind bereits die String-IDs im Backend-JSON (aus serialize_link)
-const formatLinkToEdge = l => ({id: l.link_id_str, from: l.source, to: l.target, width: 1, color: (statusToColor[l.status] || {}).color, arrows: 'to, from', dashes: l.status === 'blocking' ? [5, 5] : false, data: l, label: l.link_id_str, font: { color: '#aaa', size: 11, align: 'top', strokeWidth: 3, strokeColor: '#1a1a1a' }});
+const formatDeviceToNode = d => ({
+    id: d.device_id_str,
+    label: `${d.type}\n(${d.device_id_str})`,
+    shape: 'box',
+    borderWidth: 1,
+    color: statusToColor[d.status],
+    font: { color: '#ffffff' },
+    data: d
+});
+
+const formatLinkToEdge = l => ({
+    id: l.link_id_str,
+    from: l.source,
+    to: l.target,
+    width: 1,
+    color: (statusToColor[l.status] || {}).color,
+    arrows: 'to, from',
+    dashes: l.status === 'blocking' ? [5, 5] : false,
+    data: l,
+    label: l.link_id_str,
+    font: { color: '#aaa', size: 11, align: 'top', strokeWidth: 3, strokeColor: '#1a1a1a' }
+});
 
 // --- Initialisierung ---
 async function initialize() {
@@ -43,7 +63,6 @@ function initializeWebSocket() {
         nodes.add(data.devices.map(formatDeviceToNode));
         edges.add(data.links.map(formatLinkToEdge));
 
-        // NEU: Network-Objekt HIER initialisieren, BEVOR Event Listener gesetzt werden
         if (!network) {
             const container = document.getElementById('network-container');
             network = new vis.Network(container, { nodes, edges }, { interaction: { hover: true } });
@@ -69,15 +88,10 @@ function initializeWebSocket() {
     socket.on('topology_update', (update) => {
         console.log("Update empfangen:", update);
         if (update.type === 'link') {
-            // Stelle sicher, dass die Link-Objekte die Source/Target IDs als Strings haben
             edges.update(formatLinkToEdge(update.data));
             syncMapWithState({ links: [update.data] }); 
         } else if (update.type === 'device') {
             nodes.update(formatDeviceToNode(update.data));
-            // Kartendarstellung für Geräte-Statusänderung (z.B. Markerfarbe ändern) wäre hier sinnvoll,
-            // ist aber in Leaflet nicht direkt in formatDeviceToNode enthalten.
-            // mapMarkers[update.data.device_id_str].setIcon(...) könnte hier benötigt werden,
-            // aber das ist komplexer und außerhalb des aktuellen Scopes.
         }
     });
 
@@ -105,12 +119,76 @@ function initializeWebSocket() {
         }
     });
 
+    // --- WebSocket Event Handler für Alarmdaten ---
+    socket.on('full_state_update', (data) => {
+    updateAlarms(data.alarms);
+
+    // Sticky Properties-Panel: Auswahl nachladen
+    if (selectedId && selectedType) {
+        if (selectedType === "device") {
+            const found = data.devices.find(d => d.device_id_str === selectedId);
+            if (found) renderProperties(found);
+        } else if (selectedType === "link") {
+            const found = data.links.find(l => l.link_id_str === selectedId);
+            if (found) renderProperties(found);
+        }
+    }
+});
+
+
     socket.on('disconnect', () => {
         console.log("Verbindung zum WebSocket-Server getrennt!");
         showModal('Verbindung getrennt', 'Verbindung zum Backend verloren. Bitte Seite neu laden.', [{ text: 'OK', class: 'modal-btn-danger', callback: () => window.location.reload() }]);
     });
+
+     socket.on("ont_power_update", ({ ont_id, status, power_dbm }) => {
+        console.log(`ONT Power Update für ${ont_id}: ${power_dbm} dBm (${status})`);
+
+        const node = nodes.get(ont_id);
+        if (!node) return;
+
+        // Update in nodes
+        const updatedNode = {
+            ...node,
+            data: {
+                ...node.data,
+                properties: {
+                    ...(node.data.properties || {}),
+                    signal_status: status,
+                    received_power_dbm: power_dbm
+                }
+            }
+        };
+        nodes.update(updatedNode);
+
+        // Optional: Wenn dieser ONT gerade im Properties-Fenster ist, neu rendern
+        const selectedId = document.querySelector('#properties-content table th')?.textContent;
+        if (selectedId && selectedId.includes(ont_id)) {
+            renderProperties(updatedNode.data);
+        }
+    });
+
 }
 
+// --- Alarm-Anzeige aktualisieren ---
+function updateAlarms(alarms) {
+    const hudAlarms = document.getElementById('hud-alarms');
+    hudAlarms.textContent = alarms.length;
+    hudAlarms.style.color = alarms.length > 0 ? 'var(--accent-red)' : 'var(--accent-green)';
+
+    // Alle Icons zurücksetzen
+    nodes.update(nodes.getIds().map(id => ({ id, icon: undefined })));
+
+    // Alarm-Icons setzen
+    alarms.forEach(alarm => {
+        if (alarm.affected_object_type === 'device') {
+            nodes.update({
+                id: alarm.affected_object_id,
+                icon: { face: "'Font Awesome 5 Free'", code: '\uf071', size: 50, color: 'red' }
+            });
+        }
+    });
+}
 function refreshTopologyDisplay(topologyData) {
     nodes.clear();
     edges.clear();
@@ -121,12 +199,10 @@ function refreshTopologyDisplay(topologyData) {
 }
 
 function initializeMapView(topology) {
-    // Korrigierte Logik, um `map` nur einmal zu initialisieren
     if (!map) { 
         const mapContainer = document.getElementById('map-container');
         if (mapContainer) { 
             map = L.map(mapContainer).setView([51.96, 7.62], 10);
-            // Tile Layer direkt hier zuweisen, bevor Marker/Lines hinzugefügt werden
             L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
                 attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 20
             }).addTo(map);
@@ -143,16 +219,20 @@ function initializeMapView(topology) {
 
     topology.devices.forEach(device => { 
         if (device.coordinates) {
-            // KORREKTUR: mapMarkers-Key und Popup-ID verwenden device.device_id_str
-            mapMarkers[device.device_id_str] = L.marker(device.coordinates).addTo(map).bindPopup(`<b>${device.device_id_str}</b><br>${device.type}`); 
+            mapMarkers[device.device_id_str] = L.marker(device.coordinates)
+                .addTo(map)
+                .bindPopup(`<b>${device.device_id_str}</b><br>${device.type}`); 
         }
     });
+
     topology.links.forEach(link => {
-        // KORREKTUR: link.source und link.target sind jetzt bereits die String-IDs (vom Backend geliefert)
         const source = topology.devices.find(d => d.device_id_str === link.source); 
         const target = topology.devices.find(d => d.device_id_str === link.target); 
         if (source?.coordinates && target?.coordinates) {
-            mapLines[link.link_id_str] = L.polyline([source.coordinates, target.coordinates], { color: getEdgeLeafletColor(link.status), weight: 3, dashArray: link.status === 'blocking' ? '5, 5' : null }).addTo(map);
+            mapLines[link.link_id_str] = L.polyline(
+                [source.coordinates, target.coordinates],
+                { color: getEdgeLeafletColor(link.status), weight: 3, dashArray: link.status === 'blocking' ? '5, 5' : null }
+            ).addTo(map);
         }
     });
 }
@@ -161,7 +241,10 @@ function syncMapWithState(topology_partial) {
     if (!map) return;
     topology_partial.links.forEach(link => {
         if (mapLines[link.link_id_str]) {
-            mapLines[link.link_id_str].setStyle({ color: getEdgeLeafletColor(link.status), dashArray: link.status === 'blocking' ? '5, 5' : null });
+            mapLines[link.link_id_str].setStyle({
+                color: getEdgeLeafletColor(link.status),
+                dashArray: link.status === 'blocking' ? '5, 5' : null
+            });
         }
     });
 }
@@ -181,11 +264,12 @@ function updateHistoryButtons(status) {
 
 function updateRingPanel(topology) {
     const ringInfoDiv = document.getElementById('ring-info');
-    // WICHTIG: Ringe kommen jetzt aus der DB, deren Link-IDs auch _str
-    if (!topology.rings?.length) { ringInfoDiv.innerHTML = '<span class="loader">Keine Ringe definiert.</span>'; return; }
+    if (!topology.rings?.length) {
+        ringInfoDiv.innerHTML = '<span class="loader">Keine Ringe definiert.</span>';
+        return;
+    }
     let html = '<table>';
     topology.rings.forEach(ring => {
-        // KORREKTUR: Findet den Link über ring.rpl_link_id_str (das ist die String-ID vom Backend)
         const rpl = topology.links.find(l => l.link_id_str === ring.rpl_link_id_str); 
         if (rpl) {
             const statusClass = rpl.status === 'blocking' ? 'status-blocking' : 'status-forwarding';
@@ -197,20 +281,18 @@ function updateRingPanel(topology) {
 
 async function renderProperties(dataToShow) {
     const contentDiv = document.getElementById('properties-content');
-    if (!dataToShow) { contentDiv.innerHTML = '<span class="loader">Kein Element ausgewählt</span>'; return; }
+    if (!dataToShow) {
+        contentDiv.innerHTML = '<span class="loader">Kein Element ausgewählt</span>';
+        return;
+    }
+
     let table = '<table>';
     for (const [k, v] of Object.entries(dataToShow)) {
         if (k === 'properties') continue;
         let displayValue = v;
-        // WICHTIG: IDs sind jetzt device_id_str/link_id_str
-        if (k === 'device_id_str') displayValue = v; // Display as 'id'
-        else if (k === 'link_id_str') displayValue = v; // Display as 'id'
-        else if (k === 'source') displayValue = v; // Link-Objekt im Frontend hat source (string ID)
-        else if (k === 'target') displayValue = v; // Link-Objekt im Frontend hat target (string ID)
-        else if (k === 'coordinates' && Array.isArray(v)) displayValue = `${v[0].toFixed(4)}, ${v[1].toFixed(4)}`;
+        if (k === 'coordinates' && Array.isArray(v)) displayValue = `${v[0].toFixed(4)}, ${v[1].toFixed(4)}`;
         else if (typeof v === 'object' && v !== null) displayValue = JSON.stringify(v);
-        // KORREKTUR: 'id' wird schon als 'Id' angezeigt, also k.replace('_str', '') für die anderen '_str' Felder
-        table += `<tr><th style="text-transform: capitalize;">${k.replace('_str', '').replace('_id', ' ID')}</th><td>${displayValue}</td></tr>`; 
+        table += `<tr><th style="text-transform: capitalize;">${k.replace('_str', '').replace('_id', ' ID')}</th><td>${displayValue}</td></tr>`;
     }
     table += '</table>';
 
@@ -218,22 +300,20 @@ async function renderProperties(dataToShow) {
         table += `<h3 style="text-align:center; background-color: #333; margin: 15px 0 0; padding: 8px;">Properties</h3>`;
         table += `<table>`;
         for (const [propKey, propValue] of Object.entries(dataToShow.properties)) {
-             table += `<tr><th style="padding-left: 20px;">${propKey}</th><td>${propValue}</td></tr>`;
+            table += `<tr><th style="padding-left: 20px;">${propKey}</th><td>${propValue}</td></tr>`;
         }
         table += `</table>`;
     }
+
     contentDiv.innerHTML = table;
 
-
-    // WICHTIG: Type ist jetzt in dataToShow.type
-    if (dataToShow.type === 'ONT') { // dataToShow.type ist jetzt direkt verfügbar
+    if (dataToShow.type === 'ONT') {
         try {
-            // KORREKTUR: ID für API-Call ist jetzt dataToShow.id (die Frontend-ID, die device_id_str ist)
-            const response = await fetch(`${backendUrl}/api/devices/${dataToShow.id}/signal`); 
+            const response = await fetch(`${backendUrl}/api/devices/${dataToShow.id}/signal`);
             if (!response.ok) return;
             const signalInfo = await response.json();
             if (!signalInfo || signalInfo.status === 'NOT_APPLICABLE') return;
-            const signalRow = document.createElement('tr');
+
             let signalCellHTML = '';
             if (signalInfo.status === 'NO_PATH') {
                 signalCellHTML = `<td class="signal-los" colspan="2">${signalInfo.status} (Pfad unterbrochen)</td>`;
@@ -241,14 +321,17 @@ async function renderProperties(dataToShow) {
                 const signalStatusClass = `signal-${signalInfo.status.toLowerCase()}`;
                 signalCellHTML = `<td class="${signalStatusClass}" colspan="2">${signalInfo.power_dbm} dBm (${signalInfo.status})</td>`;
             }
+
             if (signalCellHTML) {
                 const tableElement = contentDiv.querySelector('table');
-                if (tableElement) tableElement.innerHTML += `<tr><th style="text-align:center;" colspan="2">Signal Level</th></tr><tr>${signalCellHTML}</tr>`;
+                if (tableElement)
+                    tableElement.innerHTML += `<tr><th style="text-align:center;" colspan="2">Signal Level</th></tr><tr>${signalCellHTML}</tr>`;
             }
-        } catch (e) { console.error("Fehler beim Abrufen des Signalpegels:", e); }
+        } catch (e) {
+            console.error("Fehler beim Abrufen des Signalpegels:", e);
+        }
     }
 }
-
 function toggleView() {
     const mapContainer = document.getElementById('map-container');
     const toggleBtn = document.getElementById('toggle-btn');
@@ -274,17 +357,33 @@ function showModal(title, message, buttons = [{ text: 'OK', class: 'modal-btn-pr
     document.getElementById('modal-overlay').classList.remove('hidden');
 }
 
-function hideModal() { document.getElementById('modal-overlay').classList.add('hidden'); }
+function hideModal() {
+    document.getElementById('modal-overlay').classList.add('hidden');
+}
 
 function setupEventListeners() {
     network.on('click', params => {
         if (params.nodes.length === 0 && params.edges.length === 0) {
             setTimeout(() => resetHighlight(), 0);
         }
-        const elementId = params.nodes[0] || params.edges[0]; // ID kommt jetzt als device_id_str / link_id_str
+        const elementId = params.nodes[0] || params.edges[0];
         const dataset = params.nodes.length ? nodes : edges;
-        renderProperties(elementId ? dataset.get(elementId).data : null);
+        if (params.nodes.length) {
+    selectedId = params.nodes[0];
+    selectedType = "device";
+    renderProperties(nodes.get(selectedId).data);
+} else if (params.edges.length) {
+    selectedId = params.edges[0];
+    selectedType = "link";
+    renderProperties(edges.get(selectedId).data);
+} else {
+    selectedId = null;
+    selectedType = null;
+    setTimeout(() => resetHighlight(), 0);
+    renderProperties(null);
+}
     });
+
     document.getElementById('toggle-btn').addEventListener('click', toggleView);
     document.getElementById('undo-btn').addEventListener('click', () => postAction('/api/simulation/undo'));
     document.getElementById('redo-btn').addEventListener('click', () => postAction('/api/simulation/redo'));
@@ -294,8 +393,10 @@ function setupEventListeners() {
     document.getElementById('load-snapshot-btn').addEventListener('click', loadSnapshot);
     document.getElementById('cli-input').addEventListener('keydown', handleCliKeyDown);
     document.getElementById('cli-input').addEventListener('keyup', debounce(handleAutocomplete, 250));
+
     document.addEventListener('click', (e) => {
-        if (document.getElementById('cli-suggestions') && !document.getElementById('cli-interaction-area').contains(e.target)) {
+        if (document.getElementById('cli-suggestions') &&
+            !document.getElementById('cli-interaction-area').contains(e.target)) {
             clearSuggestions();
         }
     });
@@ -321,7 +422,6 @@ async function postAction(endpoint, payload = {}) {
             }
         }
 
-        // Snapshot-Load triggert kompletten Frontend-Reset
         if (endpoint.includes('load')) {
             initialize();
         }
@@ -336,26 +436,64 @@ async function postAction(endpoint, payload = {}) {
 
 function simulateFiberCut() {
     const nodeId = document.getElementById('splitter-select').value;
-    if (nodeId) showModal('Faserschnitt simulieren', `Soll ein Faserschnitt bei <strong>${nodeId}</strong> wirklich simuliert werden?`, [{ text: 'Abbrechen', class: 'modal-btn-secondary' }, { text: 'Simulieren', class: 'modal-btn-danger', callback: () => postAction('/api/simulation/fiber-cut', { node_id: nodeId }) }]);
-    else showModal('Fehler', 'Bitte einen Splitter für den Faserschnitt auswählen.');
+    if (nodeId) {
+        showModal(
+            'Faserschnitt simulieren',
+            `Soll ein Faserschnitt bei <strong>${nodeId}</strong> wirklich simuliert werden?`,
+            [
+                { text: 'Abbrechen', class: 'modal-btn-secondary' },
+                { text: 'Simulieren', class: 'modal-btn-danger', callback: () => postAction('/api/simulation/fiber-cut', { node_id: nodeId }) }
+            ]
+        );
+    } else {
+        showModal('Fehler', 'Bitte einen Splitter für den Faserschnitt auswählen.');
+    }
 }
+
 function saveSnapshot() {
     const name = document.getElementById('snapshot-name').value.trim();
     if (name) postAction('/api/snapshot/save', { name });
     else showModal('Fehler', 'Bitte einen Namen für den Snapshot eingeben.');
 }
+
 function loadSnapshot() {
     const name = document.getElementById('snapshot-name').value.trim();
-    if (name) showModal('Snapshot laden', `Soll der Snapshot '<strong>${name}</strong>' wirklich geladen werden?`, [{ text: 'Abbrechen', class: 'modal-btn-secondary' }, { text: 'Laden', class: 'modal-btn-primary', callback: () => postAction('/api/snapshot/load', { name }) }]);
-    else showModal('Fehler', 'Bitte den Namen des zu ladenden Snapshots eingeben.');
+    if (name) {
+        showModal(
+            'Snapshot laden',
+            `Soll der Snapshot '<strong>${name}</strong>' wirklich geladen werden?`,
+            [
+                { text: 'Abbrechen', class: 'modal-btn-secondary' },
+                { text: 'Laden', class: 'modal-btn-primary', callback: () => postAction('/api/snapshot/load', { name }) }
+            ]
+        );
+    } else {
+        showModal('Fehler', 'Bitte den Namen des zu ladenden Snapshots eingeben.');
+    }
+}
+const KNOWN_COMMANDS = [
+    'help', 'undo', 'redo', 'cut', 'fiber-cut',
+    'link-down', 'link-up', 'link-degraded',
+    'trace', 'link-util'  // NEU HINZUGEFÜGT!
+];
+
+
+function debounce(func, delay) {
+    let timeout;
+    return function(...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(this, args), delay);
+    };
 }
 
-const KNOWN_COMMANDS = ['help', 'undo', 'redo', 'cut', 'fiber-cut', 'link-down', 'link-up', 'link-degraded', 'trace'];
-function debounce(func, delay) { let timeout; return function(...args) { clearTimeout(timeout); timeout = setTimeout(() => func.apply(this, args), delay); }; }
 function showCliOutput(message, type = 'info') {
     const cliOutput = document.getElementById('cli-output');
-    if(!cliOutput) return;
-    const colorMap = { error: 'var(--accent-red)', warning: '#FFC107', 'info': 'var(--text-color)' }; 
+    if (!cliOutput) return;
+    const colorMap = {
+        error: 'var(--accent-red)',
+        warning: '#FFC107',
+        info: 'var(--text-color)'
+    };
     cliOutput.innerHTML += `<div>${message}</div>`;
     cliOutput.querySelector('div:last-child').style.color = colorMap[type] || colorMap.info;
     cliOutput.scrollTop = cliOutput.scrollHeight;
@@ -365,100 +503,178 @@ async function handleCliCommand(inputElement) {
     const commandStr = inputElement.value.trim();
     if (!commandStr) return;
     showCliOutput(`<span style="color: var(--text-muted);">UNOC></span> ${commandStr}`);
+
     const [command, ...args] = commandStr.split(' ');
-    inputElement.value = ''; clearSuggestions();
-    if (command === 'trace') { await tracePath(args[0], args[1]); return; }
-    if (command === "help") { showCliOutput(`Verfügbare Befehle: ${KNOWN_COMMANDS.join(', ')}`, 'info'); }
-    else if (command === "undo") { await postAction('/api/simulation/undo'); }
-    else if (command === "redo") { await postAction('/api/simulation/redo'); }
-    else if (command === "cut" || command === "fiber-cut") { await postAction('/api/simulation/fiber-cut', { node_id: args[0] }); }
-    else if (["link-down", "link-up", "link-degraded"].includes(command)) { await postAction(`/api/links/${args[0]}/status`, { status: command.split("-")[1] }); }
-    else { showCliOutput(`Unbekannter Befehl: '${command}'.`, 'error'); }
+    inputElement.value = '';
+    clearSuggestions();
+
+    if (command === 'trace') {
+        await tracePath(args[0], args[1]);
+        return;
+    }
+    if (command === "help") {
+        showCliOutput(`Verfügbare Befehle: ${KNOWN_COMMANDS.join(', ')}`, 'info');
+    } else if (command === "undo") {
+        await postAction('/api/simulation/undo');
+    } else if (command === "redo") {
+        await postAction('/api/simulation/redo');
+    } else if (command === "cut" || command === "fiber-cut") {
+        await postAction('/api/simulation/fiber-cut', { node_id: args[0] });
+    } else if (["link-down", "link-up", "link-degraded"].includes(command)) {
+        await postAction(`/api/links/${args[0]}/status`, { status: command.split("-")[1] });
+    } else if (command === "link-util") {
+        if (!args[0] || !args[1] || isNaN(Number(args[1]))) {
+            showCliOutput("Usage: link-util <link-id> <percent>", "error");
+            return;
+        }
+        await postAction(`/api/links/${args[0]}/utilization`, { utilization: Number(args[1]) });
+    } else {
+        showCliOutput(`Unbekannter Befehl: '${command}'.`, 'error');
+    }
 }
+
 
 async function tracePath(startNode, endNode) {
     resetHighlight();
-    if (!startNode || !endNode) { showCliOutput("Fehler: `trace` benötigt Start- und Endknoten. Bsp: trace NODE-A NODE-B", 'error'); return; }
+    if (!startNode || !endNode) {
+        showCliOutput("Fehler: `trace` benötigt Start- und Endknoten. Bsp: trace NODE-A NODE-B", 'error');
+        return;
+    }
     try {
-        const response = await fetch(`${backendUrl}/api/simulation/trace-path`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ start_node: startNode, end_node: endNode }) });
-        if (!response.ok) { const error = await response.json(); throw new Error(error.description || "Unbekannter Backend-Fehler"); }
+        const response = await fetch(`${backendUrl}/api/simulation/trace-path`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ start_node: startNode, end_node: endNode })
+        });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.description || "Unbekannter Backend-Fehler");
+        }
         const path = await response.json();
-        if (path.nodes.length === 0) { showCliOutput(`Kein aktiver Pfad zwischen ${startNode} und ${endNode} gefunden.`, 'warning'); }
-        else {
+        if (path.nodes.length === 0) {
+            showCliOutput(`Kein aktiver Pfad zwischen ${startNode} und ${endNode} gefunden.`, 'warning');
+        } else {
             highlightedPath = { nodes: path.nodes, links: path.links };
-            // WICHTIG: nodes und edges IDs sind jetzt string IDs
             nodes.update(path.nodes.map(id => ({ id, borderWidth: 3, color: { border: '#00BFFF' } })));
             edges.update(path.links.map(id => ({ id, width: 4, color: '#00BFFF' })));
             showCliOutput(`Pfad gefunden: ${path.nodes.join(' -> ')}`);
         }
-    } catch (e) { showCliOutput(`Fehler bei der Pfadverfolgung: ${e.message}`, 'error'); }
+    } catch (e) {
+        showCliOutput(`Fehler bei der Pfadverfolgung: ${e.message}`, 'error');
+    }
 }
 
 function resetHighlight() {
     if (highlightedPath.nodes.length === 0 && highlightedPath.links.length === 0) return;
+
     const nodesToUpdate = nodes.get(highlightedPath.nodes);
     const edgesToUpdate = edges.get(highlightedPath.links);
+
     if (nodesToUpdate.length > 0) {
-        // Sicherstellen, dass formatDeviceToNode das korrekte Datenformat erhält
-        const nodeResets = nodesToUpdate.map(node => { const defaultStyle = formatDeviceToNode(node.data); return { id: node.id, borderWidth: defaultStyle.borderWidth, color: defaultStyle.color }; });
+        const nodeResets = nodesToUpdate.map(node => {
+            const defaultStyle = formatDeviceToNode(node.data);
+            return {
+                id: node.id,
+                borderWidth: defaultStyle.borderWidth,
+                color: defaultStyle.color
+            };
+        });
         nodes.update(nodeResets);
     }
+
     if (edgesToUpdate.length > 0) {
-        const edgeResets = edgesToUpdate.map(edge => { const defaultStyle = formatLinkToEdge(edge.data); return { id: edge.id, width: defaultStyle.width, color: defaultStyle.color }; });
+        const edgeResets = edgesToUpdate.map(edge => {
+            const defaultStyle = formatLinkToEdge(edge.data);
+            return {
+                id: edge.id,
+                width: defaultStyle.width,
+                color: defaultStyle.color
+            };
+        });
         edges.update(edgeResets);
     }
+
     highlightedPath = { nodes: [], links: [] };
 }
 
 function handleCliKeyDown(event) {
     const suggestions = document.querySelectorAll('.suggestion-item');
     let activeIndex = -1;
-    suggestions.forEach((s, i) => { if (s.classList.contains('active')) activeIndex = i; });
+    suggestions.forEach((s, i) => {
+        if (s.classList.contains('active')) activeIndex = i;
+    });
+
     if (event.key === 'Enter') {
         event.preventDefault();
-        if (activeIndex > -1) { suggestions[activeIndex].click(); }
-        else { handleCliCommand(event.target); }
+        if (activeIndex > -1) {
+            suggestions[activeIndex].click();
+        } else {
+            handleCliCommand(event.target);
+        }
     } else if (event.key === 'ArrowDown') {
         event.preventDefault();
-        if (activeIndex < suggestions.length - 1) { if (activeIndex > -1) suggestions[activeIndex].classList.remove('active'); suggestions[activeIndex + 1].classList.add('active'); }
+        if (activeIndex < suggestions.length - 1) {
+            if (activeIndex > -1) suggestions[activeIndex].classList.remove('active');
+            suggestions[activeIndex + 1].classList.add('active');
+        }
     } else if (event.key === 'ArrowUp') {
         event.preventDefault();
-        if (activeIndex > 0) { suggestions[activeIndex].classList.remove('active'); suggestions[activeIndex - 1].classList.add('active'); }
-    } else if (event.key === 'Escape') { clearSuggestions(); }
+        if (activeIndex > 0) {
+            suggestions[activeIndex].classList.remove('active');
+            suggestions[activeIndex - 1].classList.add('active');
+        }
+    } else if (event.key === 'Escape') {
+        clearSuggestions();
+    }
 }
-
 function handleAutocomplete(event) {
     const text = event.target.value;
     const parts = text.split(' ');
     const command = parts[0];
     const currentPartIndex = parts.length - 1;
     const partial = parts[currentPartIndex];
+
     if (currentPartIndex === 0) {
         const suggestions = KNOWN_COMMANDS.filter(c => c.startsWith(partial));
         renderSuggestions(suggestions, "");
         return;
     }
+
     const baseCommand = parts.slice(0, currentPartIndex).join(' ');
     let suggestions = [];
+
     const commandsWithNodeIds = ['cut', 'fiber-cut', 'trace'];
     const commandsWithLinkIds = ['link-down', 'link-up', 'link-degraded'];
+
     if (commandsWithLinkIds.includes(command)) {
-        // KORREKTUR: Greife auf item.id zu, da diese die string ID ist
-        if (currentPartIndex === 1) { suggestions = edges.get({ filter: item => item.id.toLowerCase().startsWith(partial.toLowerCase()) }).map(item => item.id); }
+        if (currentPartIndex === 1) {
+            suggestions = edges.get({
+                filter: item => item.id.toLowerCase().startsWith(partial.toLowerCase())
+            }).map(item => item.id);
+        }
     } else if (commandsWithNodeIds.includes(command)) {
-        // KORREKTUR: Greife auf item.id zu
         if (currentPartIndex === 1 || (command === 'trace' && currentPartIndex === 2)) {
             const existingNodes = parts.slice(1, currentPartIndex);
-            suggestions = nodes.get({ filter: item => !existingNodes.includes(item.id) && item.id.toLowerCase().startsWith(partial.toLowerCase()) }).map(item => item.id);
+            suggestions = nodes.get({
+                filter: item =>
+                    !existingNodes.includes(item.id) &&
+                    item.id.toLowerCase().startsWith(partial.toLowerCase())
+            }).map(item => item.id);
         }
     }
+
     renderSuggestions(suggestions, baseCommand);
 }
 
 function renderSuggestions(suggestions, baseCommand) {
     const container = document.getElementById('cli-suggestions');
-    if (suggestions.length === 0) { clearSuggestions(); return; }
-    container.innerHTML = suggestions.map(s => `<div class="suggestion-item" onclick="selectSuggestion('${baseCommand}', '${s}')">${s}</div>`).join('');
+    if (suggestions.length === 0) {
+        clearSuggestions();
+        return;
+    }
+    container.innerHTML = suggestions.map(s =>
+        `<div class="suggestion-item" onclick="selectSuggestion('${baseCommand}', '${s}')">${s}</div>`
+    ).join('');
 }
 
 function selectSuggestion(baseCommand, id) {
@@ -470,7 +686,7 @@ function selectSuggestion(baseCommand, id) {
 
 function clearSuggestions() {
     const container = document.getElementById('cli-suggestions');
-    if(container) container.innerHTML = '';
+    if (container) container.innerHTML = '';
 }
 
 function resetHighlight() {
@@ -481,7 +697,7 @@ function resetHighlight() {
     selectedDevice = null;
     selectedLink = null;
 
-    renderProperties(null);  // Setzt die rechte Sidebar zurück
+    renderProperties(null);
     console.log("Highlight reset");
 }
 
