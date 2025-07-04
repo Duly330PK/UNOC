@@ -609,28 +609,35 @@ def save_snapshot():
 @app.route('/api/snapshot/load', methods=['POST'])
 def load_snapshot():
     db = g.db
-    snapshot_name = request.get_json()['name']
-    if not snapshot_name:
-        abort(400, description="Snapshot name is required.")
-
-    SNAPSHOT_DIR = os.path.join(os.path.dirname(__file__), 'snapshots')
-    snapshot_path = os.path.join(SNAPSHOT_DIR, f"{snapshot_name}.json")
-    if not os.path.exists(snapshot_path):
-        abort(404, "Snapshot not found.")
-
     try:
-        with open(snapshot_path, 'r', encoding='utf-8') as f:
-            snapshot_data = json.load(f)
+        snapshot_name = request.get_json()['name']
+        if not snapshot_name:
+            abort(400, description="Snapshot name is required.")
 
+        SNAPSHOT_DIR = os.path.join(os.path.dirname(__file__), 'snapshots')
+        snapshot_path = os.path.join(SNAPSHOT_DIR, f"{snapshot_name}.json")
+        if not os.path.exists(snapshot_path):
+            abort(404, "Snapshot not found.")
+
+        # Debug: Inhalt ausgeben
+        with open(snapshot_path, 'r', encoding='utf-8') as f:
+            raw = f.read()
+            print("[DEBUG] Snapshot-Rohdaten:\n", raw)
+            snapshot_data = json.loads(raw)
+
+        from sqlalchemy import text
+
+        # Reihenfolge: erst Zwischentabelle, dann Links/Ringe/Geräte
+        db.execute(text("DELETE FROM ring_device_association"))
         db.query(Link).delete()
-        db.query(Ring).delete() 
+        db.query(Ring).delete()
         db.query(Device).delete()
         db.commit()
 
         device_map = {}
         for device_data in snapshot_data['devices']:
             new_device = Device(
-                device_id_str=device_data['id'], 
+                device_id_str=device_data['id'],
                 type=device_data['type'],
                 status=device_data['status'],
                 properties=device_data.get('properties', {}),
@@ -638,7 +645,7 @@ def load_snapshot():
             )
             db.add(new_device)
             device_map[device_data['id']] = new_device
-        db.commit() 
+        db.commit()
 
         for link_data in snapshot_data['links']:
             source_device = device_map.get(link_data['source'])
@@ -672,19 +679,17 @@ def load_snapshot():
             db.add(new_ring)
         db.commit()
 
-
         build_graph_from_db(db)
-        clear_history() 
-        initialize_rings(db) 
-
+        clear_history()
+        initialize_rings(db)
         add_event(f"SYSTEM: Snapshot '{snapshot_name}' loaded successfully.")
-        emit_full_state_updates(db) 
+        emit_full_state_updates(db)
         return jsonify({"message": "Snapshot loaded."})
+    
     except Exception as e:
-        db.rollback() 
+        db.rollback()
         abort(500, description=f"Failed to load snapshot: {str(e)}")
-
-
+        
 # --- WebSocket Event Handlers ---
 @socketio.on('connect')
 def handle_connect():

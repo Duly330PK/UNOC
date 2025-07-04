@@ -90,6 +90,36 @@
   ],
   "links": [
     {
+      "id": "link-coe-rhe",
+      "link_id_str": "link-coe-rhe",
+      "source": "AGG-COE-01",
+      "target": "AGG-RHE-01",
+      "source_id": 3,
+      "target_id": 4,
+      "status": "up",
+      "properties": {
+        "type": "fiber-10G",
+        "utilization_percent": 40.0,
+        "latency_ms": 2.1,
+        "jitter_ms": 0.2
+      }
+    },
+    {
+      "id": "link-rhe-mst",
+      "link_id_str": "link-rhe-mst",
+      "source": "AGG-RHE-01",
+      "target": "AGG-MST-01",
+      "source_id": 4,
+      "target_id": 2,
+      "status": "blocking",
+      "properties": {
+        "type": "fiber-10G",
+        "utilization_percent": 5.0,
+        "latency_ms": 3.5,
+        "jitter_ms": 0.1
+      }
+    },
+    {
       "id": "link-03",
       "link_id_str": "link-03",
       "source": "SPLITTER-01",
@@ -136,42 +166,12 @@
       "target": "OLT-MST-01",
       "source_id": 2,
       "target_id": 1,
-      "status": "degraded",
+      "status": "up",
       "properties": {
         "type": "fiber-10G",
         "utilization_percent": 65.0,
         "latency_ms": 0.5,
         "jitter_ms": 0.1
-      }
-    },
-    {
-      "id": "link-rhe-mst",
-      "link_id_str": "link-rhe-mst",
-      "source": "AGG-RHE-01",
-      "target": "AGG-MST-01",
-      "source_id": 4,
-      "target_id": 2,
-      "status": "blocking",
-      "properties": {
-        "type": "fiber-10G",
-        "utilization_percent": 5.0,
-        "latency_ms": 3.5,
-        "jitter_ms": 0.1
-      }
-    },
-    {
-      "id": "link-coe-rhe",
-      "link_id_str": "link-coe-rhe",
-      "source": "AGG-COE-01",
-      "target": "AGG-RHE-01",
-      "source_id": 3,
-      "target_id": 4,
-      "status": "up",
-      "properties": {
-        "type": "fiber-10G",
-        "utilization_percent": 40.0,
-        "latency_ms": 2.1,
-        "jitter_ms": 0.2
       }
     },
     {

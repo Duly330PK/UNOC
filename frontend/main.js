@@ -302,20 +302,30 @@ function setupEventListeners() {
 }
 
 async function postAction(endpoint, payload = {}) {
-    // Diese Funktion sendet weiterhin HTTP-POST-Anfragen, um Aktionen auszulösen.
-    // Die *Antwort* (also das Update) kommt aber über den WebSocket.
     try {
-        const res = await fetch(`${backendUrl}${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-        if (!res.ok) { const errorData = await res.json(); throw new Error(errorData.description || "Unbekannter Backend-Fehler"); }
-        // Hier wurde 'pollForUpdates()' entfernt und durch die WebSocket-Updates ersetzt.
-        // Bei 'load' Snapshots muss weiterhin die initialize() Funktion aufgerufen werden,
-        // da dies einen kompletten Reset des Frontend-Zustands erfordert, der vom Backend
-        // via 'initial_topology' WebSocket-Event gesendet wird.
-        if (endpoint.includes('load')) {
-             // Da initialize() die WebSocket-Verbindung neu aufbaut und initial_topology anfordert,
-             // ist dies der korrekte Weg, den Frontend-Zustand nach einem Snapshot-Load zu aktualisieren.
-             initialize(); 
+        const res = await fetch(`${backendUrl}${endpoint}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const contentType = res.headers.get("content-type");
+        if (!res.ok) {
+            if (contentType && contentType.includes("application/json")) {
+                const errorData = await res.json();
+                throw new Error(errorData.description || "Unbekannter Backend-Fehler");
+            } else {
+                const errorText = await res.text();
+                console.error("Fehlerhafte Antwort (kein JSON):", errorText);
+                throw new Error("Unerwartete Server-Antwort (kein JSON)");
+            }
         }
+
+        // Snapshot-Load triggert kompletten Frontend-Reset
+        if (endpoint.includes('load')) {
+            initialize();
+        }
+
         return true;
     } catch (error) {
         console.error("Aktion fehlgeschlagen:", error);
