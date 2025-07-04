@@ -1,6 +1,12 @@
+/*
+ * UNOC - main.js (v5 - WebSocket Client)
+ */
+
+// --- Globale Variablen & Zustand ---
 const backendUrl = "http://127.0.0.1:5000";
+let socket = null; // NEU: WebSocket-Instanz
 let network = null, map = null, nodes = new vis.DataSet([]), edges = new vis.DataSet([]);
-let mapMarkers = {}, mapLines = {}, currentView = 'topo', eventPollInterval = null;
+let mapMarkers = {}, mapLines = {}, currentView = 'topo', eventPollInterval = null; // eventPollInterval wird nicht mehr genutzt, aber bleibt zur Klarheit hier
 let highlightedPath = { nodes: [], links: [] };
 
 const statusToColor = {
@@ -11,74 +17,98 @@ const statusToColor = {
 };
 const getEdgeLeafletColor = (status) => (statusToColor[status] || { color: '#9E9E9E' }).color;
 
-const formatDeviceToNode = d => ({id: d.id, label: `${d.type}\n(${d.id})`, shape: 'box', borderWidth: 1, color: statusToColor[d.status], font: { color: '#ffffff' }, data: d});
-const formatLinkToEdge = l => ({id: l.id, from: l.source, to: l.target, width: 1, color: (statusToColor[l.status] || {}).color, arrows: 'to, from', dashes: l.status === 'blocking' ? [5, 5] : false, data: l, label: l.id, font: { color: '#aaa', size: 11, align: 'top', strokeWidth: 3, strokeColor: '#1a1a1a' }});
+// Angepasste formatDeviceToNode und formatLinkToEdge, um die '_str' IDs aus dem Backend zu verwenden
+const formatDeviceToNode = d => ({id: d.device_id_str, label: `${d.type}\n(${d.device_id_str})`, shape: 'box', borderWidth: 1, color: statusToColor[d.status], font: { color: '#ffffff' }, data: d});
+// l.source und l.target sind bereits die String-IDs im Backend-JSON (aus serialize_link)
+const formatLinkToEdge = l => ({id: l.link_id_str, from: l.source, to: l.target, width: 1, color: (statusToColor[l.status] || {}).color, arrows: 'to, from', dashes: l.status === 'blocking' ? [5, 5] : false, data: l, label: l.link_id_str, font: { color: '#aaa', size: 11, align: 'top', strokeWidth: 3, strokeColor: '#1a1a1a' }});
 
+// --- Initialisierung ---
 async function initialize() {
-    try {
-        const response = await fetch(`${backendUrl}/api/topology`);
-        if (!response.ok) throw new Error(`Backend nicht erreichbar: ${response.statusText}`);
-        const topology = await response.json();
-        
-        const splitterSelect = document.getElementById('splitter-select');
-        splitterSelect.innerHTML = '';
-        topology.devices.filter(d => d.type.toLowerCase() === 'splitter').forEach(d => {
-            const option = document.createElement('option');
-            option.value = d.id;
-            option.textContent = d.id;
-            splitterSelect.appendChild(option);
-        });
+    initializeWebSocket(); // NEU: WebSocket-Verbindung aufbauen
+}
 
+function initializeWebSocket() {
+    socket = io(backendUrl);
+
+    socket.on('connect', () => {
+        console.log("Verbunden mit dem WebSocket-Server!");
+        socket.emit('request_initial_data');
+    });
+
+    socket.on('initial_topology', (data) => {
+        console.log("Initiale Topologie empfangen:", data);
+        
+        nodes.clear();
+        edges.clear();
+        nodes.add(data.devices.map(formatDeviceToNode));
+        edges.add(data.links.map(formatLinkToEdge));
+
+        // NEU: Network-Objekt HIER initialisieren, BEVOR Event Listener gesetzt werden
         if (!network) {
             const container = document.getElementById('network-container');
             network = new vis.Network(container, { nodes, edges }, { interaction: { hover: true } });
-        }
-         if (!map) {
-            map = L.map('map-container').setView([51.96, 7.62], 10);
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-                attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 20
-            }).addTo(map);
-        }
-
-        refreshTopologyDisplay(topology);
+            setupEventListeners(); 
+        } 
         
-        if (!eventPollInterval) {
-            setupEventListeners();
-            pollForUpdates();
-            eventPollInterval = setInterval(pollForUpdates, 2500);
+        updateRingPanel(data); 
+        initializeMapView(data); 
+
+        const splitterSelect = document.getElementById('splitter-select');
+        splitterSelect.innerHTML = '';
+        data.devices.filter(d => d.type.toLowerCase() === 'splitter').forEach(d => {
+            const option = document.createElement('option');
+            option.value = d.device_id_str; 
+            option.textContent = d.device_id_str;
+            splitterSelect.appendChild(option);
+        });
+
+        updateHud(data.stats); 
+        updateHistoryButtons(data.history_status); 
+    });
+
+    socket.on('topology_update', (update) => {
+        console.log("Update empfangen:", update);
+        if (update.type === 'link') {
+            // Stelle sicher, dass die Link-Objekte die Source/Target IDs als Strings haben
+            edges.update(formatLinkToEdge(update.data));
+            syncMapWithState({ links: [update.data] }); 
+        } else if (update.type === 'device') {
+            nodes.update(formatDeviceToNode(update.data));
+            // Kartendarstellung für Geräte-Statusänderung (z.B. Markerfarbe ändern) wäre hier sinnvoll,
+            // ist aber in Leaflet nicht direkt in formatDeviceToNode enthalten.
+            // mapMarkers[update.data.device_id_str].setIcon(...) könnte hier benötigt werden,
+            // aber das ist komplexer und außerhalb des aktuellen Scopes.
         }
-    } catch (e) { 
-        console.error("Fehler bei der Initialisierung:", e);
-        const container = document.getElementById('network-container');
-        container.innerHTML = `<p style="color: var(--accent-red); padding: 20px;">Verbindung zum Backend fehlgeschlagen. Läuft der Server auf ${backendUrl}?</p>`;
-    }
-}
+    });
 
-async function pollForUpdates() {
-    try {
-        const [eventsRes, historyRes, statsRes, topoRes] = await Promise.all([
-            fetch(`${backendUrl}/api/events`), fetch(`${backendUrl}/api/history/status`),
-            fetch(`${backendUrl}/api/topology/stats`), fetch(`${backendUrl}/api/topology`)
-        ]);
-        
-        if (!eventsRes.ok || !historyRes.ok || !statsRes.ok || !topoRes.ok) throw new Error("Backend nicht erreichbar");
-
-        const events = await eventsRes.json();
-        const historyStatus = await historyRes.json();
-        const stats = await statsRes.json();
-        const topology = await topoRes.json();
-        
-        document.getElementById('event-log').innerHTML = events.map(e => `<li>${e}</li>`).join('');
+    socket.on('stats_update', (stats) => { 
+        console.log("Stats Update empfangen:", stats);
         updateHud(stats);
-        updateHistoryButtons(historyStatus);
+    });
 
-        if (highlightedPath.nodes.length === 0) {
-            nodes.update(topology.devices.map(formatDeviceToNode));
-            edges.update(topology.links.map(formatLinkToEdge));
+    socket.on('history_status_update', (status) => { 
+        console.log("History Status Update empfangen:", status);
+        updateHistoryButtons(status);
+    });
+
+    socket.on('new_event', (event_message) => {
+        console.log("Neues Event empfangen:", event_message);
+        const eventLog = document.getElementById('event-log');
+        const newLi = document.createElement('li');
+        newLi.textContent = event_message;
+        if (eventLog.firstChild && eventLog.firstChild.classList.contains('loader')) {
+            eventLog.innerHTML = ''; 
         }
-        updateRingPanel(topology);
-        syncMapWithState(topology);
-    } catch (error) { console.error("Polling-Fehler:", error); }
+        eventLog.prepend(newLi);
+        while (eventLog.children.length > 100) {
+            eventLog.removeChild(eventLog.lastChild);
+        }
+    });
+
+    socket.on('disconnect', () => {
+        console.log("Verbindung zum WebSocket-Server getrennt!");
+        showModal('Verbindung getrennt', 'Verbindung zum Backend verloren. Bitte Seite neu laden.', [{ text: 'OK', class: 'modal-btn-danger', callback: () => window.location.reload() }]);
+    });
 }
 
 function refreshTopologyDisplay(topologyData) {
@@ -91,26 +121,47 @@ function refreshTopologyDisplay(topologyData) {
 }
 
 function initializeMapView(topology) {
-    if(map){
+    // Korrigierte Logik, um `map` nur einmal zu initialisieren
+    if (!map) { 
+        const mapContainer = document.getElementById('map-container');
+        if (mapContainer) { 
+            map = L.map(mapContainer).setView([51.96, 7.62], 10);
+            // Tile Layer direkt hier zuweisen, bevor Marker/Lines hinzugefügt werden
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 20
+            }).addTo(map);
+        } else {
+            console.error("Map container not found!");
+            return;
+        }
+    } else {
         Object.values(mapMarkers).forEach(marker => marker.remove());
         Object.values(mapLines).forEach(line => line.remove());
-        mapMarkers = {}; mapLines = {};
+        mapMarkers = {}; 
+        mapLines = {};
     }
-    topology.devices.forEach(device => { if (device.coordinates) mapMarkers[device.id] = L.marker(device.coordinates).addTo(map).bindPopup(`<b>${device.id}</b><br>${device.type}`); });
+
+    topology.devices.forEach(device => { 
+        if (device.coordinates) {
+            // KORREKTUR: mapMarkers-Key und Popup-ID verwenden device.device_id_str
+            mapMarkers[device.device_id_str] = L.marker(device.coordinates).addTo(map).bindPopup(`<b>${device.device_id_str}</b><br>${device.type}`); 
+        }
+    });
     topology.links.forEach(link => {
-        const source = topology.devices.find(d => d.id === link.source);
-        const target = topology.devices.find(d => d.id === link.target);
+        // KORREKTUR: link.source und link.target sind jetzt bereits die String-IDs (vom Backend geliefert)
+        const source = topology.devices.find(d => d.device_id_str === link.source); 
+        const target = topology.devices.find(d => d.device_id_str === link.target); 
         if (source?.coordinates && target?.coordinates) {
-            mapLines[link.id] = L.polyline([source.coordinates, target.coordinates], { color: getEdgeLeafletColor(link.status), weight: 3, dashArray: link.status === 'blocking' ? '5, 5' : null }).addTo(map);
+            mapLines[link.link_id_str] = L.polyline([source.coordinates, target.coordinates], { color: getEdgeLeafletColor(link.status), weight: 3, dashArray: link.status === 'blocking' ? '5, 5' : null }).addTo(map);
         }
     });
 }
 
-function syncMapWithState(topology) {
+function syncMapWithState(topology_partial) { 
     if (!map) return;
-    topology.links.forEach(link => {
-        if (mapLines[link.id]) {
-            mapLines[link.id].setStyle({ color: getEdgeLeafletColor(link.status), dashArray: link.status === 'blocking' ? '5, 5' : null });
+    topology_partial.links.forEach(link => {
+        if (mapLines[link.link_id_str]) {
+            mapLines[link.link_id_str].setStyle({ color: getEdgeLeafletColor(link.status), dashArray: link.status === 'blocking' ? '5, 5' : null });
         }
     });
 }
@@ -130,10 +181,12 @@ function updateHistoryButtons(status) {
 
 function updateRingPanel(topology) {
     const ringInfoDiv = document.getElementById('ring-info');
+    // WICHTIG: Ringe kommen jetzt aus der DB, deren Link-IDs auch _str
     if (!topology.rings?.length) { ringInfoDiv.innerHTML = '<span class="loader">Keine Ringe definiert.</span>'; return; }
     let html = '<table>';
     topology.rings.forEach(ring => {
-        const rpl = topology.links.find(l => l.id === ring.rpl_link_id);
+        // KORREKTUR: Findet den Link über ring.rpl_link_id_str (das ist die String-ID vom Backend)
+        const rpl = topology.links.find(l => l.link_id_str === ring.rpl_link_id_str); 
         if (rpl) {
             const statusClass = rpl.status === 'blocking' ? 'status-blocking' : 'status-forwarding';
             html += `<tr><td><b>${ring.name}</b></td><td class="${statusClass}">${rpl.status.toUpperCase()}</td></tr>`;
@@ -149,21 +202,34 @@ async function renderProperties(dataToShow) {
     for (const [k, v] of Object.entries(dataToShow)) {
         if (k === 'properties') continue;
         let displayValue = v;
-        if (k === 'coordinates' && Array.isArray(v)) displayValue = `${v[0].toFixed(4)}, ${v[1].toFixed(4)}`;
+        // WICHTIG: IDs sind jetzt device_id_str/link_id_str
+        if (k === 'device_id_str') displayValue = v; // Display as 'id'
+        else if (k === 'link_id_str') displayValue = v; // Display as 'id'
+        else if (k === 'source') displayValue = v; // Link-Objekt im Frontend hat source (string ID)
+        else if (k === 'target') displayValue = v; // Link-Objekt im Frontend hat target (string ID)
+        else if (k === 'coordinates' && Array.isArray(v)) displayValue = `${v[0].toFixed(4)}, ${v[1].toFixed(4)}`;
         else if (typeof v === 'object' && v !== null) displayValue = JSON.stringify(v);
-        table += `<tr><th style="text-transform: capitalize;">${k}</th><td>${displayValue}</td></tr>`;
+        // KORREKTUR: 'id' wird schon als 'Id' angezeigt, also k.replace('_str', '') für die anderen '_str' Felder
+        table += `<tr><th style="text-transform: capitalize;">${k.replace('_str', '').replace('_id', ' ID')}</th><td>${displayValue}</td></tr>`; 
     }
+    table += '</table>';
+
     if (dataToShow.properties && Object.keys(dataToShow.properties).length > 0) {
-        table += `<tr><th colspan="2" style="text-align:center; background-color: #333;">Properties</th></tr>`;
+        table += `<h3 style="text-align:center; background-color: #333; margin: 15px 0 0; padding: 8px;">Properties</h3>`;
+        table += `<table>`;
         for (const [propKey, propValue] of Object.entries(dataToShow.properties)) {
              table += `<tr><th style="padding-left: 20px;">${propKey}</th><td>${propValue}</td></tr>`;
         }
+        table += `</table>`;
     }
-    table += '</table>';
     contentDiv.innerHTML = table;
-    if (dataToShow.type === 'ONT') {
+
+
+    // WICHTIG: Type ist jetzt in dataToShow.type
+    if (dataToShow.type === 'ONT') { // dataToShow.type ist jetzt direkt verfügbar
         try {
-            const response = await fetch(`${backendUrl}/api/devices/${dataToShow.id}/signal`);
+            // KORREKTUR: ID für API-Call ist jetzt dataToShow.id (die Frontend-ID, die device_id_str ist)
+            const response = await fetch(`${backendUrl}/api/devices/${dataToShow.id}/signal`); 
             if (!response.ok) return;
             const signalInfo = await response.json();
             if (!signalInfo || signalInfo.status === 'NOT_APPLICABLE') return;
@@ -215,7 +281,7 @@ function setupEventListeners() {
         if (params.nodes.length === 0 && params.edges.length === 0) {
             setTimeout(() => resetHighlight(), 0);
         }
-        const elementId = params.nodes[0] || params.edges[0];
+        const elementId = params.nodes[0] || params.edges[0]; // ID kommt jetzt als device_id_str / link_id_str
         const dataset = params.nodes.length ? nodes : edges;
         renderProperties(elementId ? dataset.get(elementId).data : null);
     });
@@ -236,14 +302,25 @@ function setupEventListeners() {
 }
 
 async function postAction(endpoint, payload = {}) {
+    // Diese Funktion sendet weiterhin HTTP-POST-Anfragen, um Aktionen auszulösen.
+    // Die *Antwort* (also das Update) kommt aber über den WebSocket.
     try {
         const res = await fetch(`${backendUrl}${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         if (!res.ok) { const errorData = await res.json(); throw new Error(errorData.description || "Unbekannter Backend-Fehler"); }
-        if (endpoint.includes('load')) { await initialize(); } 
-        else { await pollForUpdates(); }
+        // Hier wurde 'pollForUpdates()' entfernt und durch die WebSocket-Updates ersetzt.
+        // Bei 'load' Snapshots muss weiterhin die initialize() Funktion aufgerufen werden,
+        // da dies einen kompletten Reset des Frontend-Zustands erfordert, der vom Backend
+        // via 'initial_topology' WebSocket-Event gesendet wird.
+        if (endpoint.includes('load')) {
+             // Da initialize() die WebSocket-Verbindung neu aufbaut und initial_topology anfordert,
+             // ist dies der korrekte Weg, den Frontend-Zustand nach einem Snapshot-Load zu aktualisieren.
+             initialize(); 
+        }
+        return true;
     } catch (error) {
         console.error("Aktion fehlgeschlagen:", error);
         showModal('Aktion fehlgeschlagen', error.message);
+        return false;
     }
 }
 
@@ -268,7 +345,7 @@ function debounce(func, delay) { let timeout; return function(...args) { clearTi
 function showCliOutput(message, type = 'info') {
     const cliOutput = document.getElementById('cli-output');
     if(!cliOutput) return;
-    const colorMap = { error: 'var(--accent-red)', warning: '#FFC107', info: 'var(--text-color)' };
+    const colorMap = { error: 'var(--accent-red)', warning: '#FFC107', 'info': 'var(--text-color)' }; 
     cliOutput.innerHTML += `<div>${message}</div>`;
     cliOutput.querySelector('div:last-child').style.color = colorMap[type] || colorMap.info;
     cliOutput.scrollTop = cliOutput.scrollHeight;
@@ -294,11 +371,12 @@ async function tracePath(startNode, endNode) {
     if (!startNode || !endNode) { showCliOutput("Fehler: `trace` benötigt Start- und Endknoten. Bsp: trace NODE-A NODE-B", 'error'); return; }
     try {
         const response = await fetch(`${backendUrl}/api/simulation/trace-path`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ start_node: startNode, end_node: endNode }) });
-        if (!response.ok) { const error = await response.json(); throw new Error(error.description || "Unbekannter Fehler bei der Pfadsuche"); }
+        if (!response.ok) { const error = await response.json(); throw new Error(error.description || "Unbekannter Backend-Fehler"); }
         const path = await response.json();
         if (path.nodes.length === 0) { showCliOutput(`Kein aktiver Pfad zwischen ${startNode} und ${endNode} gefunden.`, 'warning'); }
         else {
             highlightedPath = { nodes: path.nodes, links: path.links };
+            // WICHTIG: nodes und edges IDs sind jetzt string IDs
             nodes.update(path.nodes.map(id => ({ id, borderWidth: 3, color: { border: '#00BFFF' } })));
             edges.update(path.links.map(id => ({ id, width: 4, color: '#00BFFF' })));
             showCliOutput(`Pfad gefunden: ${path.nodes.join(' -> ')}`);
@@ -311,6 +389,7 @@ function resetHighlight() {
     const nodesToUpdate = nodes.get(highlightedPath.nodes);
     const edgesToUpdate = edges.get(highlightedPath.links);
     if (nodesToUpdate.length > 0) {
+        // Sicherstellen, dass formatDeviceToNode das korrekte Datenformat erhält
         const nodeResets = nodesToUpdate.map(node => { const defaultStyle = formatDeviceToNode(node.data); return { id: node.id, borderWidth: defaultStyle.borderWidth, color: defaultStyle.color }; });
         nodes.update(nodeResets);
     }
@@ -354,8 +433,10 @@ function handleAutocomplete(event) {
     const commandsWithNodeIds = ['cut', 'fiber-cut', 'trace'];
     const commandsWithLinkIds = ['link-down', 'link-up', 'link-degraded'];
     if (commandsWithLinkIds.includes(command)) {
+        // KORREKTUR: Greife auf item.id zu, da diese die string ID ist
         if (currentPartIndex === 1) { suggestions = edges.get({ filter: item => item.id.toLowerCase().startsWith(partial.toLowerCase()) }).map(item => item.id); }
     } else if (commandsWithNodeIds.includes(command)) {
+        // KORREKTUR: Greife auf item.id zu
         if (currentPartIndex === 1 || (command === 'trace' && currentPartIndex === 2)) {
             const existingNodes = parts.slice(1, currentPartIndex);
             suggestions = nodes.get({ filter: item => !existingNodes.includes(item.id) && item.id.toLowerCase().startsWith(partial.toLowerCase()) }).map(item => item.id);
@@ -380,6 +461,18 @@ function selectSuggestion(baseCommand, id) {
 function clearSuggestions() {
     const container = document.getElementById('cli-suggestions');
     if(container) container.innerHTML = '';
+}
+
+function resetHighlight() {
+    if (network) {
+        network.unselectAll();
+    }
+
+    selectedDevice = null;
+    selectedLink = null;
+
+    renderProperties(null);  // Setzt die rechte Sidebar zurück
+    console.log("Highlight reset");
 }
 
 document.addEventListener('DOMContentLoaded', initialize);

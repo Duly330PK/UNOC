@@ -1,7 +1,7 @@
 #
 # UNOC - backend.py
 #
-# Main backend application with state, snapshots, and undo/redo functionality.
+# Main backend application with state, snapshots, and undo/redo functionality (now DB & WS driven).
 #
 
 import yaml
@@ -9,148 +9,338 @@ import sys
 import datetime
 import os
 import json
-from flask import Flask, jsonify, abort, request
+from flask import Flask, jsonify, abort, request, g
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit # Import emit
 from pydantic import ValidationError
-import networkx as nx
 
-from schemas import (
-    Topology,
-    UpdateLinkStatusPayload,
-    UpdateDeviceStatusPayload,
-    SUPPORTED_TOPOLOGY_VERSION
-)
+import networkx as nx
+from sqlalchemy.exc import NoResultFound
+from sqlalchemy.orm import Session as DBSessionType # Importieren für Typ-Annotation
+
+# Importiere Datenbank-Module und ORM-Modelle
+from database import SessionLocal, init_db, Device, Link, Ring 
+
+# Importiere die angepassten Command-Klassen
 from commands import (
+    Command,
     UpdateLinkStatusCommand,
     UpdateDeviceStatusCommand,
     CompositeCommand
 )
+# Importiere Pydantic-Schemas für Validierung und Serialisierung
+# Beachte, dass wir jetzt die DBMappings verwenden und diese dann in Pydantic-Schemas für die API konvertieren.
+# Wir brauchen angepasste Schemas, die die _str IDs berücksichtigen
+from schemas import (
+    Topology, # Wird jetzt eher als API-Response-Schema genutzt
+    # Pydantic-Versionen der ORM-Modelle für Serialisierung
+    Device as PydanticDevice, 
+    Link as PydanticLink,     
+    Ring as PydanticRing,     
+    UpdateLinkStatusPayload,
+    UpdateDeviceStatusPayload,
+    SUPPORTED_TOPOLOGY_VERSION
+)
 
 # --- Application Setup ---
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "http://localhost:8000"}}, supports_credentials=True, methods=["GET", "POST", "OPTIONS"])
+# WICHTIG: SECRET_KEY ist für Flask-SocketIO Session-Management erforderlich
+app.config['SECRET_KEY'] = os.getenv("SECRET_KEY", "super-geheimes-flask-socketio-schluessel!") # Aus .env laden
 
-SNAPSHOT_DIR = os.path.join(os.path.dirname(__file__), 'snapshots')
+# KORREKTUR: CORS origins anpassen, um 'null' für Dateizugriff zu erlauben
+CORS(app, resources={r"/*": {"origins": ["*", "null"], "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]}}) 
+socketio = SocketIO(app, cors_allowed_origins=["http://localhost:8000"])
 
-# --- In-Memory State ---
-app_state = {
-    "topology": None,
-    "graph": None,  # Für Graphenanalyse
-    "events": [],
-    "undo_stack": [],
-    "redo_stack": []
-}
+
 
 # --- Physikalische Konstanten ---
 FIBER_LOSS_PER_KM = 0.35 # dB pro Kilometer
 
-# --- Helper Functions ---
+# --- In-Memory State (Reduziert) ---
+# Nur noch Undo/Redo Stacks und der Graph bleiben In-Memory
+# Topology und Events sind jetzt in der DB
+app_state = {
+    "graph": nx.DiGraph(),  # Für Graphenanalyse
+    "undo_stack": [],
+    "redo_stack": []
+}
+
+# --- Helper Functions for Database Session Management ---
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# Middleware für Datenbank-Sitzung (optional, aber nützlich für Request-Lifecycle)
+@app.before_request
+def before_request():
+    g.db = next(get_db())
+
+@app.after_request
+def after_request(response):
+    db = getattr(g, 'db', None)
+    if db is not None:
+        db.close()
+    return response
+
+# --- Serialization Helper (ORM-Objekte zu Pydantic/JSON) ---
+def serialize_device(device_obj: Device) -> dict:
+    return {
+        "id": device_obj.device_id_str, # Frontend erwartet 'id'
+        "device_id_str": device_obj.device_id_str,
+        "type": device_obj.type,
+        "status": device_obj.status,
+        "properties": device_obj.properties,
+        "coordinates": device_obj.coordinates
+    }
+
+def serialize_link(link_obj: Link) -> dict:
+    # KORREKTUR: source und target müssen hier die device_id_str der verbundenen Geräte sein
+    # Die ORM-Beziehungen Link.source und Link.target sind die Device-Objekte
+    return {
+        "id": link_obj.link_id_str, # Frontend erwartet 'id'
+        "link_id_str": link_obj.link_id_str,
+        "source": link_obj.source.device_id_str, # Frontend erwartet source/target als IDs
+        "target": link_obj.target.device_id_str,
+        "source_id": link_obj.source_id, # DB-interner ID, könnte für Debugging nützlich sein
+        "target_id": link_obj.target_id, # DB-interner ID
+        "status": link_obj.status,
+        "properties": link_obj.properties
+    }
+
+def serialize_ring(ring_obj: Ring) -> dict:
+    return {
+        "id": ring_obj.ring_id_str, # Frontend erwartet 'id'
+        "ring_id_str": ring_obj.ring_id_str,
+        "name": ring_obj.name,
+        "rpl_link_id": ring_obj.rpl_link_id_str, # Frontend erwartet 'rpl_link_id'
+        "nodes": [node.device_id_str for node in ring_obj.nodes] # Liste der String-IDs
+    }
+
+def serialize_topology(db_session: DBSessionType) -> dict: 
+    """Serialisiert die gesamte Topologie aus der Datenbank für das Frontend."""
+    devices = db_session.query(Device).all()
+    links = db_session.query(Link).all()
+    rings = db_session.query(Ring).all()
+
+    return {
+        "version": SUPPORTED_TOPOLOGY_VERSION, 
+        "devices": [serialize_device(d) for d in devices],
+        "links": [serialize_link(l) for l in links],
+        "rings": [serialize_ring(r) for r in rings]
+    }
+
+# --- Event Managemt (now DB-enbacked) ---
 def add_event(message: str):
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    app_state["events"].insert(0, f"[{timestamp}] {message}")
-    app_state["events"] = app_state["events"][:100]
+    event_message = f"[{timestamp}] {message}"
+    try:
+        socketio.emit('new_event', event_message)
+    except RuntimeError as e:
+        if "Working outside of request context" in str(e):
+            print(f"WARN: Event '{event_message}' not emitted via WS (no request context during startup).")
+        else:
+            raise e
 
-def execute_command(command):
+
+# --- Command Execution & History Management ---
+def execute_command(command: Command):
     """Executes a command and manages undo/redo stacks."""
     command.execute()
     app_state["undo_stack"].append(command)
     app_state["redo_stack"].clear()
+    
+    build_graph_from_db(g.db) 
+    emit_full_state_updates(g.db) 
+
 
 def clear_history():
     """Clears undo/redo history, e.g., after loading a snapshot."""
     app_state["undo_stack"].clear()
     app_state["redo_stack"].clear()
+    try:
+        emit_history_status() 
+    except RuntimeError as e:
+        if "Working outside of request context" in str(e):
+            pass 
+        else:
+            raise e
 
-def build_graph(topology: Topology) -> nx.DiGraph:
-    """Builds a NetworkX directed graph from the topology data."""
-    G = nx.DiGraph()
-    for device in topology.devices:
-        G.add_node(device.id, data=device)
-    for link in topology.links:
-        G.add_edge(link.source, link.target, data=link)
-    return G
 
-# --- Ring-Logik ---
-def initialize_rings():
-    """Sets the initial state for all defined rings (e.g., blocks RPL)."""
-    topology = app_state["topology"]
-    if not hasattr(topology, 'rings') or not topology.rings:
+# --- Graph Building ---
+def build_graph_from_db(db_session: DBSessionType): 
+    """Baut den In-Memory Graphen aus den Datenbank-Daten."""
+    app_state["graph"].clear()
+    devices = db_session.query(Device).all()
+    links = db_session.query(Link).all()
+
+    for device in devices:
+        app_state["graph"].add_node(device.device_id_str, db_obj=device)
+    for link in links:
+        source_id_str = link.source.device_id_str if link.source else None
+        target_id_str = link.target.device_id_str if link.target else None
+
+        if source_id_str and target_id_str:
+            app_state["graph"].add_edge(source_id_str, target_id_str, db_obj=link, link_id_str=link.link_id_str)
+    print("In-Memory Graph wurde aus der Datenbank gebaut.")
+
+# --- Realtime WebSocket Emitting (Angepasst) ---
+
+def emit_full_state_updates(db_session: DBSessionType): 
+    """Emits the full topology, stats, and history status. Designed to be called within a request context."""
+    full_topology = serialize_topology(db_session)
+    stats = get_current_topology_stats(db_session)
+    history_status = get_current_history_status()
+
+    socketio.emit('initial_topology', {
+        'devices': full_topology['devices'],
+        'links': full_topology['links'],
+        'rings': full_topology['rings'],
+        'stats': stats,
+        'history_status': history_status
+    })
+
+
+def emit_stats_update(db_session: DBSessionType): 
+    stats = get_current_topology_stats(db_session)
+    socketio.emit('stats_update', stats)
+
+
+def emit_history_status():
+    status = get_current_history_status()
+    socketio.emit('history_status_update', status)
+
+def get_current_history_status() -> dict:
+    return {
+        "can_undo": len(app_state["undo_stack"]) > 0,
+        "can_redo": len(app_state["redo_stack"]) > 0
+    }
+
+def get_current_topology_stats(db_session: DBSessionType) -> dict: 
+    devices = db_session.query(Device).all()
+    links = db_session.query(Link).all()
+    
+    devices_total = len(devices)
+    devices_online = sum(1 for d in devices if d.status == 'online')
+    links_total = len(links)
+    links_up = sum(1 for l in links if l.status == 'up')
+    
+    links_with_issue = sum(1 for l in links if l.status not in ['up', 'blocking'])
+    devices_with_issue = devices_total - devices_online
+    alarms = devices_with_issue + links_with_issue
+    
+    return {
+        "devices_total": devices_total,
+        "devices_online": devices_online,
+        "links_total": links_total,
+        "links_up": links_up,
+        "alarms": alarms
+    }
+
+
+# --- Ring-Logik (Angepasst an DB-Objekte) ---
+def initialize_rings(db_session: DBSessionType): 
+    """Sets the initial state for all defined rings (e.g., blocks RPL).
+    Does NOT emit updates here, as it might be called outside a request context."""
+    rings = db_session.query(Ring).all()
+    if not rings:
         return
 
-    for ring in topology.rings:
-        rpl_link = next((l for l in topology.links if l.id == ring.rpl_link_id), None)
-        if rpl_link:
+    for ring in rings:
+        rpl_link = db_session.query(Link).filter_by(link_id_str=ring.rpl_link_id_str).first()
+        if rpl_link and rpl_link.status != 'blocking':
             rpl_link.status = 'blocking'
-            add_event(f"ERPS: Link '{rpl_link.id}' in Ring '{ring.id}' set to BLOCKING.")
+            db_session.add(rpl_link)
+            db_session.commit()
+            db_session.refresh(rpl_link)
+            add_event(f"ERPS: Link '{rpl_link.link_id_str}' in Ring '{ring.name}' set to BLOCKING.")
 
-def handle_ring_failure(broken_link_id: str):
+
+def handle_ring_failure(db_session: DBSessionType, broken_link_id_str: str): 
     """Checks if a broken link is part of a ring and triggers failover."""
-    topology = app_state["topology"]
     affected_ring = None
-    if not hasattr(topology, 'rings') or not topology.rings:
+    rings = db_session.query(Ring).all()
+    if not rings:
         return None
         
-    for r in topology.rings:
-        link_nodes = set()
-        for l in topology.links:
-            if l.id == broken_link_id:
-                link_nodes.add(l.source)
-                link_nodes.add(l.target)
-                break
+    broken_link_db_obj = db_session.query(Link).filter_by(link_id_str=broken_link_id_str).first()
+    if not broken_link_db_obj:
+        return None # Link not found
+
+    for r in rings:
+        ring_node_ids_str = {node.device_id_str for node in r.nodes}
         
-        if hasattr(r, 'nodes') and link_nodes.issubset(set(r.nodes)):
+        if broken_link_db_obj.source.device_id_str in ring_node_ids_str and \
+           broken_link_db_obj.target.device_id_str in ring_node_ids_str:
             affected_ring = r
             break
 
-    if not affected_ring or affected_ring.rpl_link_id == broken_link_id:
+    if not affected_ring or affected_ring.rpl_link_id_str == broken_link_id_str:
         return None
 
-    rpl_link = next((l for l in topology.links if l.id == affected_ring.rpl_link_id), None)
+    rpl_link = db_session.query(Link).filter_by(link_id_str=affected_ring.rpl_link_id_str).first()
     if rpl_link and rpl_link.status == 'blocking':
-        failover_command = UpdateLinkStatusCommand(topology, rpl_link.id, 'up')
-        add_event(f"ERPS: Failover in Ring '{affected_ring.id}'. Unblocking RPL '{rpl_link.id}'.")
+        failover_command = UpdateLinkStatusCommand(db_session, rpl_link.link_id_str, 'up')
+        add_event(f"ERPS: Failover in Ring '{affected_ring.name}'. Unblocking RPL '{rpl_link.link_id_str}'.")
         return failover_command
     return None
 
-# --- Berechnungslogik ---
-def calculate_ont_power(ont_id: str):
+# --- Berechnungslogik (Angepasst an DB-Objekte) ---
+def calculate_ont_power(db_session: DBSessionType, ont_id_str: str): 
     """
     Calculates the received optical power at a specific ONT.
     """
-    graph = app_state["graph"]
-    topology = app_state["topology"]
+    graph = app_state["graph"] # Nutzt den In-Memory Graph
 
     try:
-        olts = [d.id for d in topology.devices if d.type == 'OLT']
+        olts = db_session.query(Device).filter_by(type='OLT').all()
+        olt_ids_str = [d.device_id_str for d in olts]
+        
         path_to_olt = None
-        for olt_id in olts:
-            if nx.has_path(graph, olt_id, ont_id):
-                path_to_olt = nx.shortest_path(graph, source=olt_id, target=ont_id)
+        for olt_id_str in olt_ids_str:
+            if nx.has_path(graph, olt_id_str, ont_id_str):
+                path_to_olt = nx.shortest_path(graph, source=olt_id_str, target=ont_id_str)
                 break
         if not path_to_olt:
             raise nx.NetworkXNoPath
     except (nx.NetworkXNoPath, nx.NodeNotFound):
         return {"status": "NO_PATH", "power_dbm": None}
 
-    path_devices_data = [graph.nodes[node_id]['data'] for node_id in path_to_olt]
-    path_links_data = [graph.get_edge_data(path_to_olt[i], path_to_olt[i+1])['data'] for i in range(len(path_to_olt) - 1)]
-
-    for device in path_devices_data[1:]:
-        if device.status == 'offline':
-            return {"status": "NO_PATH", "power_dbm": None, "reason": f"Device {device.id} is offline"}
+    path_devices_db_obj = [graph.nodes[node_id_str]['db_obj'] for node_id_str in path_to_olt]
     
-    for link in path_links_data:
-        if link.status not in ['up', 'blocking']:
-            return {"status": "NO_PATH", "power_dbm": None, "reason": f"Link {link.id} is {link.status}"}
+    path_links_db_obj = []
+    for i in range(len(path_to_olt) - 1):
+        u, v = path_to_olt[i], path_to_olt[i+1]
+        edge_data = graph.get_edge_data(u, v) or graph.get_edge_data(v, u)
+        if edge_data and 'db_obj' in edge_data:
+            path_links_db_obj.append(edge_data['db_obj'])
+        else:
+            link_from_db = db_session.query(Link).filter(
+                (Link.source.has(device_id_str=u) & Link.target.has(device_id_str=v)) |
+                (Link.source.has(device_id_str=v) & Link.target.has(device_id_str=u))
+            ).first()
+            if link_from_db:
+                path_links_db_obj.append(link_from_db)
 
-    olt_device = path_devices_data[0]
+
+    for device in path_devices_db_obj[1:]: 
+        if device.status == 'offline':
+            return {"status": "NO_PATH", "power_dbm": None, "reason": f"Device {device.device_id_str} is offline"}
+    
+    for link in path_links_db_obj:
+        if link.status not in ['up', 'blocking']:
+            return {"status": "NO_PATH", "power_dbm": None, "reason": f"Link {link.link_id_str} is {link.status}"}
+
+    olt_device = path_devices_db_obj[0]
     transmit_power = olt_device.properties.get("transmit_power_dbm", 0)
 
     total_loss = 0
-    for link_data in path_links_data:
+    for link_data in path_links_db_obj:
         total_loss += link_data.properties.get("length_km", 0) * FIBER_LOSS_PER_KM
     
-    for device in path_devices_data:
+    for device in path_devices_db_obj:
         if device.type == 'Splitter':
             total_loss += device.properties.get("insertion_loss_db", 0)
 
@@ -166,144 +356,117 @@ def calculate_ont_power(ont_id: str):
     return {"status": signal_status, "power_dbm": round(received_power, 2)}
 
 
-# --- Data Loading and Initialization ---
-def load_and_validate_topology(filepath="topology.yml"):
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            data = yaml.safe_load(f)
-        topology = Topology.model_validate(data)
-        if topology.version != SUPPORTED_TOPOLOGY_VERSION:
-            raise ValueError(f"Unsupported version '{topology.version}'. Requires '{SUPPORTED_TOPOLOGY_VERSION}'.")
-        device_ids = {d.id for d in topology.devices}
-        for link in topology.links:
-            if link.source not in device_ids or link.target not in device_ids:
-                raise ValueError(f"Link '{link.id}' references a non-existent device.")
-        return topology
-    except (FileNotFoundError, ValidationError, ValueError) as e:
-        print(f"FATAL: Could not load topology from '{filepath}': {e}", file=sys.stderr)
-        sys.exit(1)
-
-# --- API Endpoints ---
+# --- API Endpoints (Angepasst an DB & WebSockets) ---
 @app.route('/api/topology', methods=['GET'])
-def get_topology():
-    if app_state["topology"]:
-        return jsonify(app_state["topology"].model_dump())
-    abort(500)
-
-@app.route('/api/topology/stats', methods=['GET'])
-def get_topology_stats():
-    if not app_state["topology"]:
-        abort(500, description="Topology not initialized.")
-    
-    devices = app_state["topology"].devices
-    links = app_state["topology"].links
-    
-    stats = {
-        "devices_total": len(devices),
-        "devices_online": sum(1 for d in devices if d.status == 'online'),
-        "links_total": len(links),
-        "links_up": sum(1 for l in links if l.status == 'up'),
-    }
-    links_with_issue = sum(1 for l in links if l.status not in ['up', 'blocking'])
-    devices_with_issue = stats["devices_total"] - stats["devices_online"]
-    stats["alarms"] = devices_with_issue + links_with_issue
-    
-    return jsonify(stats)
-
-@app.route('/api/events', methods=['GET'])
-def get_events():
-    return jsonify(app_state["events"])
-
-@app.route('/api/history/status', methods=['GET'])
-def get_history_status():
+def get_topology_api(): 
+    db = g.db
+    topology_data = serialize_topology(db)
+    stats = get_current_topology_stats(db)
+    history_status = get_current_history_status()
     return jsonify({
-        "can_undo": len(app_state["undo_stack"]) > 0,
-        "can_redo": len(app_state["redo_stack"]) > 0
+        'devices': topology_data['devices'],
+        'links': topology_data['links'],
+        'rings': topology_data['rings'],
+        'stats': stats,
+        'history_status': history_status
     })
 
-@app.route('/api/links/<string:link_id>/status', methods=['POST'])
-def update_link_status(link_id: str):
+@app.route('/api/topology/stats', methods=['GET'])
+def get_topology_stats_api():
+    db = g.db
+    return jsonify(get_current_topology_stats(db))
+
+@app.route('/api/events', methods=['GET'])
+def get_events_api():
+    return jsonify(["Events sind jetzt über WebSockets verfügbar."])
+
+
+@app.route('/api/history/status', methods=['GET'])
+def get_history_status_api():
+    return jsonify(get_current_history_status())
+
+@app.route('/api/links/<string:link_id_str>/status', methods=['POST'])
+def update_link_status(link_id_str: str):
+    db = g.db
     try:
         payload = UpdateLinkStatusPayload.model_validate(request.get_json())
     except ValidationError as e:
         abort(422, description=e.errors())
 
-    topology = app_state["topology"]
-    target_link = next((link for link in topology.links if link.id == link_id), None)
+    target_link = db.query(Link).filter_by(link_id_str=link_id_str).first()
     if not target_link:
-        abort(404, description=f"Link with ID '{link_id}' not found.")
+        abort(404, description=f"Link with ID '{link_id_str}' not found.")
 
-    main_command = UpdateLinkStatusCommand(topology, link_id, payload.status)
+    main_command = UpdateLinkStatusCommand(db, link_id_str, payload.status)
     
-    # KORREKTUR: CompositeCommand ohne Argumente initialisieren
-    composite_command = CompositeCommand()
+    composite_command = CompositeCommand(db) 
     composite_command.add(main_command)
     
     if payload.status in ['down', 'degraded']:
-        failover_cmd = handle_ring_failure(link_id)
+        failover_cmd = handle_ring_failure(db, link_id_str)
         if failover_cmd:
             composite_command.add(failover_cmd)
             
     try:
         execute_command(composite_command)
-        add_event(f"SIMULATION: Status of link '{link_id}' changed to '{payload.status}'.")
-        return jsonify(target_link.model_dump())
+        add_event(f"SIMULATION: Status of link '{link_id_str}' changed to '{payload.status}'.")
+        return jsonify({"message": f"Link '{link_id_str}' status updated."}) 
     except ValueError as e:
+        db.rollback() 
         abort(500, description=str(e))
 
-@app.route('/api/devices/<string:device_id>/signal', methods=['GET'])
-def get_device_signal(device_id: str):
-    device = next((d for d in app_state["topology"].devices if d.id == device_id), None)
+@app.route('/api/devices/<string:device_id_str>/signal', methods=['GET'])
+def get_device_signal(device_id_str: str):
+    db = g.db
+    device = db.query(Device).filter_by(device_id_str=device_id_str).first()
     if not device:
         abort(404, description="Device not found.")
     if device.type != 'ONT':
         return jsonify({"status": "NOT_APPLICABLE", "power_dbm": None})
 
-    signal_info = calculate_ont_power(device_id)
+    build_graph_from_db(db) 
+    signal_info = calculate_ont_power(db, device_id_str)
     return jsonify(signal_info)
 
 @app.route('/api/simulation/trace-path', methods=['POST'])
 def trace_path():
-    """
-    Finds the shortest path between two nodes and returns the components.
-    """
+    db = g.db
     payload = request.get_json()
-    start_node = payload.get('start_node')
-    end_node = payload.get('end_node')
+    start_node_str = payload.get('start_node')
+    end_node_str = payload.get('end_node')
 
-    if not start_node or not end_node:
+    if not start_node_str or not end_node_str:
         abort(400, description="Missing 'start_node' or 'end_node' in request.")
 
+    build_graph_from_db(db)
     graph = app_state["graph"]
-    if not graph.has_node(start_node) or not graph.has_node(end_node):
+
+    if not graph.has_node(start_node_str) or not graph.has_node(end_node_str):
         abort(404, description="One of the specified nodes does not exist.")
 
     try:
-        # Wir erstellen einen temporären Graphen
         active_graph = nx.Graph() 
-        active_graph.add_nodes_from([d.id for d in app_state["topology"].devices])
-        
-        # KORREKTUR: Nur 'up'-Links für die Pfadsuche berücksichtigen
-        active_links = [
-            (l.source, l.target) for l in app_state["topology"].links if l.status == 'up'
-        ]
+        active_graph.add_nodes_from([d.device_id_str for d in db.query(Device).all()]) 
+
+        active_links = []
+        for l in db.query(Link).all():
+            if l.status == 'up': 
+                active_links.append((l.source.device_id_str, l.target.device_id_str))
         active_graph.add_edges_from(active_links)
 
-        path_nodes = nx.shortest_path(active_graph, source=start_node, target=end_node)
+        path_nodes_str = nx.shortest_path(active_graph, source=start_node_str, target=end_node_str)
         
-        path_links = []
-        for i in range(len(path_nodes) - 1):
-            u, v = path_nodes[i], path_nodes[i+1]
-            link_id = next(
-                (l.id for l in app_state["topology"].links 
-                 if (l.source == u and l.target == v) or 
-                    (l.source == v and l.target == u)),
-                None
-            )
-            if link_id:
-                path_links.append(link_id)
+        path_links_str = []
+        for i in range(len(path_nodes_str) - 1):
+            u_str, v_str = path_nodes_str[i], path_nodes_str[i+1]
+            link_obj = db.query(Link).filter(
+                (Link.source.has(device_id_str=u_str) & Link.target.has(device_id_str=v_str)) | 
+                (Link.source.has(device_id_str=v_str) & Link.target.has(device_id_str=u_str))
+            ).first()
+            if link_obj:
+                path_links_str.append(link_obj.link_id_str)
 
-        return jsonify({"nodes": path_nodes, "links": path_links})
+        return jsonify({"nodes": path_nodes_str, "links": path_links_str})
 
     except nx.NetworkXNoPath:
         return jsonify({"nodes": [], "links": []})
@@ -312,100 +475,261 @@ def trace_path():
 
 @app.route('/api/simulation/undo', methods=['POST'])
 def undo_last_action():
+    db = g.db
     if not app_state["undo_stack"]:
         abort(400, description="Nothing to undo.")
     command = app_state["undo_stack"].pop()
-    command.undo()
-    app_state["redo_stack"].append(command)
-    add_event("SYSTEM: Undid last action.")
-    return jsonify({"message": "Action undone."})
+    try:
+        command.undo()
+        app_state["redo_stack"].append(command)
+        add_event("SYSTEM: Undid last action.")
+        build_graph_from_db(db) 
+        emit_full_state_updates(db) 
+        return jsonify({"message": "Action undone."})
+    except ValueError as e:
+        db.rollback()
+        abort(500, description=str(e))
+
 
 @app.route('/api/simulation/redo', methods=['POST'])
 def redo_last_action():
+    db = g.db
     if not app_state["redo_stack"]:
         abort(400, description="Nothing to redo.")
     command = app_state["redo_stack"].pop()
-    command.execute()
-    app_state["undo_stack"].append(command)
-    add_event("SYSTEM: Redid last action.")
-    return jsonify({"message": "Action redone."})
+    try:
+        command.execute() 
+        app_state["undo_stack"].append(command)
+        add_event("SYSTEM: Redid last action.")
+        build_graph_from_db(db) 
+        emit_full_state_updates(db) 
+        return jsonify({"message": "Action redone."})
+    except ValueError as e:
+        db.rollback()
+        abort(500, description=str(e))
+
 
 @app.route('/api/simulation/fiber-cut', methods=['POST'])
 def fiber_cut():
+    db = g.db
     payload = request.get_json()
-    cut_node_id = payload.get('node_id')
-    if not cut_node_id or not app_state["graph"].has_node(cut_node_id):
-        abort(404, description=f"Node '{cut_node_id}' not found.")
-
-    graph = app_state["graph"]
-    topology = app_state["topology"]
+    cut_node_id_str = payload.get('node_id')
     
-    descendant_nodes = nx.descendants(graph, cut_node_id)
-    affected_nodes_set = descendant_nodes.union({cut_node_id})
+    build_graph_from_db(db)
+    graph = app_state["graph"]
 
-    composite_command = CompositeCommand()
+    if not cut_node_id_str or not graph.has_node(cut_node_id_str):
+        abort(404, description=f"Node '{cut_node_id_str}' not found.")
 
-    for node_id in affected_nodes_set:
-        device = next((d for d in topology.devices if d.id == node_id), None)
+    descendant_nodes_str = nx.descendants(graph, cut_node_id_str)
+    affected_nodes_set_str = descendant_nodes_str.union({cut_node_id_str})
+
+    composite_command = CompositeCommand(db)
+
+    for node_id_str in affected_nodes_set_str:
+        device = db.query(Device).filter_by(device_id_str=node_id_str).first()
         if device and device.status != 'offline':
-            composite_command.add(UpdateDeviceStatusCommand(topology, node_id, 'offline'))
+            composite_command.add(UpdateDeviceStatusCommand(db, node_id_str, 'offline'))
 
-    for link in topology.links:
-        if link.source in affected_nodes_set or link.target in affected_nodes_set:
-            if link.status != 'down':
-                composite_command.add(UpdateLinkStatusCommand(topology, link.id, 'down'))
+    # KORREKTUR: Finde alle Links, deren Source oder Target in affected_nodes_set_str liegt
+    # Wir müssen die internen Integer-IDs der Devices verwenden.
+    # Zuerst die Device-Objekte basierend auf ihren String-IDs abfragen
+    affected_device_objs = db.query(Device).filter(Device.device_id_str.in_(affected_nodes_set_str)).all()
+    # Dann deren interne IDs sammeln
+    device_ids_in_set = [d.id for d in affected_device_objs]
+
+    affected_links = db.query(Link).filter(
+        (Link.source_id.in_(device_ids_in_set)) | 
+        (Link.target_id.in_(device_ids_in_set))
+    ).all()
+
+    for link in affected_links:
+        if link.status != 'down':
+            composite_command.add(UpdateLinkStatusCommand(db, link.link_id_str, 'down'))
 
     if composite_command.commands:
-        execute_command(composite_command)
-        add_event(f"SCENARIO: Fiber cut at '{cut_node_id}' affected {len(affected_nodes_set)} devices.")
+        try:
+            execute_command(composite_command)
+            add_event(f"SCENARIO: Fiber cut at '{cut_node_id_str}' affected {len(affected_nodes_set_str)} devices.")
+            return jsonify({"message": f"Fiber cut scenario at '{cut_node_id_str}' executed."})
+        except ValueError as e:
+            db.rollback()
+            abort(500, description=str(e))
+    else:
+        return jsonify({"message": "No changes needed for fiber cut scenario."})
 
-    return jsonify({"message": f"Fiber cut scenario at '{cut_node_id}' executed."})
 
-# --- Snapshot Endpoints ---
+# --- Snapshot Endpoints (Angepasst an DB) ---
 @app.route('/api/snapshot/save', methods=['POST'])
 def save_snapshot():
+    db = g.db
     snapshot_name = request.get_json()['name']
-    snapshot_path = os.path.join(SNAPSHOT_DIR, f"{snapshot_name}.json")
-    if not os.path.exists(SNAPSHOT_DIR):
-        os.makedirs(SNAPSHOT_DIR)
+    if not snapshot_name:
+        abort(400, description="Snapshot name is required.")
 
-    add_event(f"SYSTEM: Snapshot '{snapshot_name}' saved.")
+    try:
+        # Topologie aus dem aktuellen Zustand holen
+        topology_data = serialize_topology(db)
+        
+        # Ringe separat serialisieren (als list of dicts mit 'id', 'name', 'nodes', 'rpl_link_id')
+        rings = []
+        for ring in db.query(Ring).all():
+            rings.append({
+                "id": ring.ring_id_str,
+                "ring_id_str": ring.ring_id_str,
+                "name": ring.name,
+                "rpl_link_id": ring.rpl_link_id_str,
+                "nodes": [d.device_id_str for d in ring.nodes]
+            })
 
-    state_to_save = {
-        "topology": app_state["topology"].model_dump(),
-        "events": app_state["events"]
-    }
+        # Snapshot als vollständiges Objekt bauen
+        snapshot = {
+            "version": "1.0.0",
+            "devices": topology_data["devices"],
+            "links": topology_data["links"],
+            "rings": rings
+        }
 
-    with open(snapshot_path, 'w', encoding='utf-8') as f:
-        json.dump(state_to_save, f, indent=2)
+        # Pfad vorbereiten
+        SNAPSHOT_DIR = os.path.join(os.path.dirname(__file__), 'snapshots')
+        if not os.path.exists(SNAPSHOT_DIR):
+            os.makedirs(SNAPSHOT_DIR)
+        snapshot_path = os.path.join(SNAPSHOT_DIR, f"{snapshot_name}.json")
 
-    return jsonify({"message": "Snapshot saved."}), 201
+        # Schreiben
+        with open(snapshot_path, 'w', encoding='utf-8') as f:
+            json.dump(snapshot, f, indent=2)
+
+        add_event(f"SYSTEM: Snapshot '{snapshot_name}' saved.")
+        return jsonify({"message": "Snapshot saved."}), 201
+    except Exception as e:
+        db.rollback()
+        abort(500, description=f"Failed to save snapshot: {str(e)}")
 
 @app.route('/api/snapshot/load', methods=['POST'])
 def load_snapshot():
+    db = g.db
     snapshot_name = request.get_json()['name']
+    if not snapshot_name:
+        abort(400, description="Snapshot name is required.")
+
+    SNAPSHOT_DIR = os.path.join(os.path.dirname(__file__), 'snapshots')
     snapshot_path = os.path.join(SNAPSHOT_DIR, f"{snapshot_name}.json")
     if not os.path.exists(snapshot_path):
         abort(404, "Snapshot not found.")
 
-    with open(snapshot_path, 'r', encoding='utf-8') as f:
-        snapshot_data = json.load(f)
+    try:
+        with open(snapshot_path, 'r', encoding='utf-8') as f:
+            snapshot_data = json.load(f)
 
-    topology = Topology.model_validate(snapshot_data["topology"])
-    app_state["topology"] = topology
-    app_state["graph"] = build_graph(topology)
-    app_state["events"] = snapshot_data.get("events", [])
-    clear_history()
-    
-    add_event(f"SYSTEM: Snapshot '{snapshot_name}' loaded successfully.")
-    return jsonify({"message": "Snapshot loaded."})
+        db.query(Link).delete()
+        db.query(Ring).delete() 
+        db.query(Device).delete()
+        db.commit()
+
+        device_map = {}
+        for device_data in snapshot_data['devices']:
+            new_device = Device(
+                device_id_str=device_data['id'], 
+                type=device_data['type'],
+                status=device_data['status'],
+                properties=device_data.get('properties', {}),
+                coordinates=device_data.get('coordinates')
+            )
+            db.add(new_device)
+            device_map[device_data['id']] = new_device
+        db.commit() 
+
+        for link_data in snapshot_data['links']:
+            source_device = device_map.get(link_data['source'])
+            target_device = device_map.get(link_data['target'])
+            if not source_device or not target_device:
+                raise ValueError(f"Device for link '{link_data['id']}' not found in snapshot.")
+            new_link = Link(
+                link_id_str=link_data['id'],
+                source_id=source_device.id,
+                target_id=target_device.id,
+                status=link_data['status'],
+                properties=link_data.get('properties', {})
+            )
+            db.add(new_link)
+        db.commit()
+
+        for ring_data in snapshot_data.get('rings', []):
+            node_devices = []
+            for node_id_str in ring_data['nodes']:
+                device = device_map.get(node_id_str)
+                if not device:
+                    raise ValueError(f"Device '{node_id_str}' for ring '{ring_data['id']}' not found in snapshot.")
+                node_devices.append(device)
+
+            new_ring = Ring(
+                ring_id_str=ring_data['id'],
+                name=ring_data['name'],
+                rpl_link_id_str=ring_data['rpl_link_id'],
+                nodes=node_devices
+            )
+            db.add(new_ring)
+        db.commit()
+
+
+        build_graph_from_db(db)
+        clear_history() 
+        initialize_rings(db) 
+
+        add_event(f"SYSTEM: Snapshot '{snapshot_name}' loaded successfully.")
+        emit_full_state_updates(db) 
+        return jsonify({"message": "Snapshot loaded."})
+    except Exception as e:
+        db.rollback() 
+        abort(500, description=f"Failed to load snapshot: {str(e)}")
+
+
+# --- WebSocket Event Handlers ---
+@socketio.on('connect')
+def handle_connect():
+    print(f'Client verbunden: {request.sid}')
+    # Sende hier noch keine Daten, warte auf 'request_initial_data'
+
+
+@socketio.on('request_initial_data')
+def handle_initial_data_request():
+    """Sendet die komplette Topologie und initialen Status an einen neuen Client."""
+    db_session = SessionLocal() 
+    try:
+        print(f"Client {request.sid} fordert initiale Daten an (über WebSocket).")
+        full_topology_data = serialize_topology(db_session) 
+        current_stats = get_current_topology_stats(db_session) 
+        current_history_status = get_current_history_status()
+        socketio.emit('initial_topology', {
+            'devices': full_topology_data['devices'],
+            'links': full_topology_data['links'],
+            'rings': full_topology_data['rings'],
+            'stats': current_stats,
+            'history_status': current_history_status
+        }, room=request.sid) 
+    finally:
+        db_session.close() 
+
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    print(f'Client getrennt: {request.sid}')
 
 # --- Main Execution ---
 if __name__ == '__main__':
-    topology = load_and_validate_topology()
-    app_state["topology"] = topology
-    app_state["graph"] = build_graph(topology)
-    initialize_rings()
-    add_event("SYSTEM: Backend started, topology/graph loaded, rings initialized.")
-    print("Starting UNOC backend server (v11 with fixes)...")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    print("Initialisiere Datenbank-Schema...")
+    init_db()
+    print("Schema initialisiert.")
+
+    with SessionLocal() as db: 
+        build_graph_from_db(db)
+        initialize_rings(db) 
+
+    SNAPSHOT_DIR = os.path.join(os.path.dirname(__file__), 'snapshots')
+    if not os.path.exists(SNAPSHOT_DIR):
+        os.makedirs(SNAPSHOT_DIR)
+
+    add_event("SYSTEM: Backend started with PostgreSQL & WebSockets. Topology loaded, rings initialized.")
+    print("Starting UNOC Backend Server (v12 - Phase 4 DB/WS Integration)...")
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)

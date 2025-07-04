@@ -1,0 +1,206 @@
+{
+  "version": "1.0.0",
+  "devices": [
+    {
+      "id": "OLT-MST-01",
+      "device_id_str": "OLT-MST-01",
+      "type": "OLT",
+      "status": "online",
+      "properties": {
+        "name": "OLT-Muenster-01",
+        "transmit_power_dbm": 4.0
+      },
+      "coordinates": [
+        51.96,
+        7.625
+      ]
+    },
+    {
+      "id": "AGG-MST-01",
+      "device_id_str": "AGG-MST-01",
+      "type": "Aggregation Switch",
+      "status": "online",
+      "properties": {
+        "name": "Aggregation-Muenster-01"
+      },
+      "coordinates": [
+        51.962,
+        7.628
+      ]
+    },
+    {
+      "id": "AGG-COE-01",
+      "device_id_str": "AGG-COE-01",
+      "type": "Aggregation Switch",
+      "status": "online",
+      "properties": {
+        "name": "Aggregation-Coesfeld-01"
+      },
+      "coordinates": [
+        51.945,
+        7.165
+      ]
+    },
+    {
+      "id": "AGG-RHE-01",
+      "device_id_str": "AGG-RHE-01",
+      "type": "Aggregation Switch",
+      "status": "online",
+      "properties": {
+        "name": "Aggregation-Rheine-01"
+      },
+      "coordinates": [
+        52.28,
+        7.435
+      ]
+    },
+    {
+      "id": "SPLITTER-01",
+      "device_id_str": "SPLITTER-01",
+      "type": "Splitter",
+      "status": "online",
+      "properties": {
+        "ratio": "1:16",
+        "insertion_loss_db": 10.5
+      },
+      "coordinates": null
+    },
+    {
+      "id": "ONT-KUNDE-123",
+      "device_id_str": "ONT-KUNDE-123",
+      "type": "ONT",
+      "status": "online",
+      "properties": {
+        "customer_id": 4711,
+        "vlan": 101
+      },
+      "coordinates": null
+    },
+    {
+      "id": "ONT-KUNDE-124",
+      "device_id_str": "ONT-KUNDE-124",
+      "type": "ONT",
+      "status": "offline",
+      "properties": {
+        "customer_id": 4712,
+        "vlan": 102
+      },
+      "coordinates": null
+    }
+  ],
+  "links": [
+    {
+      "id": "link-01",
+      "link_id_str": "link-01",
+      "source": "AGG-MST-01",
+      "target": "OLT-MST-01",
+      "source_id": 2,
+      "target_id": 1,
+      "status": "up",
+      "properties": {
+        "type": "fiber-10G",
+        "utilization_percent": 65.0,
+        "latency_ms": 0.5,
+        "jitter_ms": 0.1
+      }
+    },
+    {
+      "id": "link-03",
+      "link_id_str": "link-03",
+      "source": "SPLITTER-01",
+      "target": "ONT-KUNDE-123",
+      "source_id": 5,
+      "target_id": 6,
+      "status": "up",
+      "properties": {
+        "type": "fiber",
+        "length_km": 0.8
+      }
+    },
+    {
+      "id": "link-04",
+      "link_id_str": "link-04",
+      "source": "SPLITTER-01",
+      "target": "ONT-KUNDE-124",
+      "source_id": 5,
+      "target_id": 7,
+      "status": "down",
+      "properties": {
+        "type": "fiber",
+        "length_km": 1.2
+      }
+    },
+    {
+      "id": "link-mst-coe",
+      "link_id_str": "link-mst-coe",
+      "source": "AGG-MST-01",
+      "target": "AGG-COE-01",
+      "source_id": 2,
+      "target_id": 3,
+      "status": "up",
+      "properties": {
+        "type": "fiber-10G",
+        "utilization_percent": 85.0,
+        "latency_ms": 1.8,
+        "jitter_ms": 0.9
+      }
+    },
+    {
+      "id": "link-coe-rhe",
+      "link_id_str": "link-coe-rhe",
+      "source": "AGG-COE-01",
+      "target": "AGG-RHE-01",
+      "source_id": 3,
+      "target_id": 4,
+      "status": "up",
+      "properties": {
+        "type": "fiber-10G",
+        "utilization_percent": 40.0,
+        "latency_ms": 2.1,
+        "jitter_ms": 0.2
+      }
+    },
+    {
+      "id": "link-rhe-mst",
+      "link_id_str": "link-rhe-mst",
+      "source": "AGG-RHE-01",
+      "target": "AGG-MST-01",
+      "source_id": 4,
+      "target_id": 2,
+      "status": "blocking",
+      "properties": {
+        "type": "fiber-10G",
+        "utilization_percent": 5.0,
+        "latency_ms": 3.5,
+        "jitter_ms": 0.1
+      }
+    },
+    {
+      "id": "link-02",
+      "link_id_str": "link-02",
+      "source": "OLT-MST-01",
+      "target": "SPLITTER-01",
+      "source_id": 1,
+      "target_id": 5,
+      "status": "down",
+      "properties": {
+        "type": "fiber",
+        "length_km": 2.5,
+        "utilization_percent": 30.0
+      }
+    }
+  ],
+  "rings": [
+    {
+      "id": "RING-MST-LAND",
+      "ring_id_str": "RING-MST-LAND",
+      "name": "Metro-Ring M\u00c3\u00bcnsterland",
+      "rpl_link_id": "link-rhe-mst",
+      "nodes": [
+        "AGG-MST-01",
+        "AGG-COE-01",
+        "AGG-RHE-01"
+      ]
+    }
+  ]
+}
