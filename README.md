@@ -14,7 +14,27 @@ Ideal für Forschung, Ausbildung, NetOps-Tests und visuelle Netzwerk-Demonstrati
 - 🖥️ Integrierte CLI mit Autovervollständigung und Trace-Funktion
 - 🚦 Unterstützung für Ring Protection (RPL-Logik, Blocking-Status)
 - 🔍 Signalpegelanzeige für ONTs mit dBm-Klassifikation
+- 🟠 **Physikalisches GPON-Modell:** Realistische Signalberechnung, Splitter-Dämpfung und kaskadierte Topologie
+- 🚨 **Alarm-Engine:** Schwellenwerte, professionelle Alarme (Severity/Status), proaktive Überwachung von Links & ONTs
 
+🖥️ CLI-Befehle (Frontend)
+- Befehl	Beschreibung
+- help	Listet alle verfügbaren Befehle auf
+- trace <NODE-A> <NODE-B>	Visualisiert Pfad zwischen zwei Knoten
+- link-down <LINK-ID>	Setzt Link-Status auf „down“ (Störung)
+- link-up <LINK-ID>	Repariert Link („up“)
+- link-degraded <LINK-ID>	Setzt Link auf „degraded“ (z.B. Störung light)
+- link-util <LINK-ID> <Prozent>	Setzt die Auslastung eines Links (0–100 %)
+- fiber-cut <NODE-ID>	Simuliert einen Faserschnitt ab bestimmtem Node
+- cut <NODE-ID>	Alias für fiber-cut
+- undo	Letzte Aktion rückgängig machen
+- redo	Rückgängig gemachte Aktion wiederholen
+
+Hinweise:
+
+<NODE-ID> und <LINK-ID> stehen für die jeweiligen Geräte-/Verbindungs-IDs (siehe Topologie).
+
+Die CLI gibt Rückmeldungen zu jedem Kommando direkt aus (inkl. Fehlermeldungen bei falscher Eingabe).
 ---
 
 ## 🚀 Backend Setup
@@ -61,6 +81,7 @@ POST	/api/snapshot/load	Snapshot laden
 POST	/api/simulation/undo	Rückgängig machen
 POST	/api/simulation/redo	Wiederherstellen
 POST	/api/simulation/trace-path	Trace zwischen zwei Geräten
+POST	/api/links/<link_id>/utilization	→ Link-Auslastung (in %) setzen
 
 🧬 Beispiel: Link-Status ändern
 bash
@@ -112,6 +133,12 @@ UNOC/
 └── tests/
     ├── __init__.py
     └── test_backend.py
+
+### Hinweise zur Alarm-Logik und Signalphysik
+
+   - Die Simulation erkennt automatisch zu hohe Link-Auslastungen oder schlechte ONT-Signalpegel.
+   - Alarme erscheinen live (HUD, Eventlog) und werden automatisch "CLEARED", wenn Werte sich wieder normalisieren.
+
 
 
 © 2025 – Matthias Buchalik & Contributors
