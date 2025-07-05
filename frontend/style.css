@@ -195,3 +195,18 @@ button:disabled { background-color: #555; border-color: #666; cursor: not-allowe
 .modal-btn-primary { background-color: var(--accent-color); border-color: var(--accent-color); }
 .modal-btn-danger { background-color: var(--accent-red); border-color: var(--accent-red); }
 .modal-btn-secondary { background-color: #555; border-color: #666; }
+
+/* ... (in style.css, am Ende hinzufügen) */
+.vis-network .vis-canvas .vis-edge.backbone {
+    stroke-width: 4px;
+    stroke-dasharray: 10, 10;
+}
+.vis-network .vis-canvas .vis-edge.regional {
+    stroke-width: 2.5px;
+    stroke-dasharray: 5, 5;
+    stroke: #8A2BE2; /* BlueViolet */
+}
+/* Wird per JS hinzugefügt/entfernt */
+.hidden-by-zoom {
+    display: none !important;
+}

@@ -29,8 +29,6 @@ from commands import (
     CompositeCommand
 )
 # Importiere Pydantic-Schemas für Validierung und Serialisierung
-# Beachte, dass wir jetzt die DBMappings verwenden und diese dann in Pydantic-Schemas für die API konvertieren.
-# Wir brauchen angepasste Schemas, die die _str IDs berücksichtigen
 from schemas import (
     Topology, # Wird jetzt eher als API-Response-Schema genutzt
     # Pydantic-Versionen der ORM-Modelle für Serialisierung
@@ -49,7 +47,7 @@ app.config['SECRET_KEY'] = os.getenv("SECRET_KEY", "super-geheimes-flask-socketi
 
 # KORREKTUR: CORS origins anpassen, um 'null' für Dateizugriff zu erlauben
 CORS(app, resources={r"/*": {"origins": ["*", "null"], "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]}}) 
-socketio = SocketIO(app, cors_allowed_origins=["http://localhost:8000"])
+socketio = SocketIO(app, cors_allowed_origins=["http://localhost:8000", "http://127.0.0.1:8000"])
 
 
 
@@ -58,7 +56,6 @@ FIBER_LOSS_PER_KM = 0.35 # dB pro Kilometer
 
 # --- In-Memory State (Reduziert) ---
 # Nur noch Undo/Redo Stacks und der Graph bleiben In-Memory
-# Topology und Events sind jetzt in der DB
 app_state = {
     "graph": nx.DiGraph(),  # Für Graphenanalyse
     "undo_stack": [],
@@ -86,51 +83,37 @@ def after_request(response):
     return response
 
 # --- Serialization Helper (ORM-Objekte zu Pydantic/JSON) ---
-def serialize_device(device_obj: Device) -> dict:
-    return {
-        "id": device_obj.device_id_str, # Frontend erwartet 'id'
-        "device_id_str": device_obj.device_id_str,
-        "type": device_obj.type,
-        "status": device_obj.status,
-        "properties": device_obj.properties,
-        "coordinates": device_obj.coordinates
-    }
+def serialize_topology(db: DBSessionType) -> dict:
+    """Liest die gesamte Topologie aus der DB und erstellt ein serialisierbares Diktat."""
+    devices = db.query(Device).all()
+    links = db.query(Link).all()
+    rings = db.query(Ring).all()
 
-def serialize_link(link_obj: Link) -> dict:
-    # KORREKTUR: source und target müssen hier die device_id_str der verbundenen Geräte sein
-    # Die ORM-Beziehungen Link.source und Link.target sind die Device-Objekte
-    return {
-        "id": link_obj.link_id_str, # Frontend erwartet 'id'
-        "link_id_str": link_obj.link_id_str,
-        "source": link_obj.source.device_id_str, # Frontend erwartet source/target als IDs
-        "target": link_obj.target.device_id_str,
-        "source_id": link_obj.source_id, # DB-interner ID, könnte für Debugging nützlich sein
-        "target_id": link_obj.target_id, # DB-interner ID
-        "status": link_obj.status,
-        "properties": link_obj.properties
-    }
+    # Um die Beziehungen schnell aufzulösen
+    device_id_map = {d.id: d.device_id_str for d in devices}
 
-def serialize_ring(ring_obj: Ring) -> dict:
-    return {
-        "id": ring_obj.ring_id_str, # Frontend erwartet 'id'
-        "ring_id_str": ring_obj.ring_id_str,
-        "name": ring_obj.name,
-        "rpl_link_id": ring_obj.rpl_link_id_str, # Frontend erwartet 'rpl_link_id'
-        "nodes": [node.device_id_str for node in ring_obj.nodes] # Liste der String-IDs
-    }
+    serialized_devices = [{
+        "id": d.device_id_str, "type": d.type, "status": d.status,
+        "properties": d.properties, "coordinates": d.coordinates
+    } for d in devices]
 
-def serialize_topology(db_session: DBSessionType) -> dict: 
-    """Serialisiert die gesamte Topologie aus der Datenbank für das Frontend."""
-    devices = db_session.query(Device).all()
-    links = db_session.query(Link).all()
-    rings = db_session.query(Ring).all()
+    serialized_links = [{
+        "id": l.link_id_str,
+        # Sicherstellen, dass die IDs im Mapping existieren
+        "source": device_id_map.get(l.source_id), 
+        "target": device_id_map.get(l.target_id),
+        "status": l.status, 
+        "properties": l.properties
+    } for l in links]
 
-    return {
-        "version": SUPPORTED_TOPOLOGY_VERSION, 
-        "devices": [serialize_device(d) for d in devices],
-        "links": [serialize_link(l) for l in links],
-        "rings": [serialize_ring(r) for r in rings]
-    }
+    serialized_rings = [{
+        "id": r.ring_id_str,
+        "name": r.name,
+        "rpl_link_id": r.rpl_link_id_str,
+        "nodes": [node.device_id_str for node in r.nodes]
+    } for r in rings]
+    
+    return {"devices": serialized_devices, "links": serialized_links, "rings": serialized_rings}
 
 # --- Event Managemt (now DB-enbacked) ---
 def add_event(message: str):
@@ -179,15 +162,14 @@ def build_graph_from_db(db_session: DBSessionType):
     for device in devices:
         app_state["graph"].add_node(device.device_id_str, db_obj=device)
     for link in links:
-        source_id_str = link.source.device_id_str if link.source else None
-        target_id_str = link.target.device_id_str if link.target else None
-
-        if source_id_str and target_id_str:
+        # Sicherstellen, dass die Beziehungen geladen sind und nicht None sind
+        if link.source and link.target:
+            source_id_str = link.source.device_id_str
+            target_id_str = link.target.device_id_str
             app_state["graph"].add_edge(source_id_str, target_id_str, db_obj=link, link_id_str=link.link_id_str)
     print("In-Memory Graph wurde aus der Datenbank gebaut.")
 
 # --- Realtime WebSocket Emitting (Angepasst) ---
-
 def emit_full_state_updates(db_session: DBSessionType): 
     """Emits the full topology, stats, alarms, and history status."""
     full_topology = serialize_topology(db_session)
@@ -215,8 +197,9 @@ def emit_full_state_updates(db_session: DBSessionType):
         'rings': full_topology['rings'],
         'stats': stats,
         'history_status': history_status,
-        'alarms': serialized_alarms  # NEU!
+        'alarms': serialized_alarms
     })
+
 
 def emit_stats_update(db_session: DBSessionType): 
     stats = get_current_topology_stats(db_session)
@@ -257,8 +240,7 @@ def get_current_topology_stats(db_session: DBSessionType) -> dict:
 
 # --- Ring-Logik (Angepasst an DB-Objekte) ---
 def initialize_rings(db_session: DBSessionType): 
-    """Sets the initial state for all defined rings (e.g., blocks RPL).
-    Does NOT emit updates here, as it might be called outside a request context."""
+    """Sets the initial state for all defined rings (e.g., blocks RPL)."""
     rings = db_session.query(Ring).all()
     if not rings:
         return
@@ -319,21 +301,14 @@ def check_thresholds_and_update_alarms(db, updated_object, **kwargs):
             status="ACTIVE"
         ).first()
 
-        # Trigger-Alarm
         if utilization > 80 and not existing_alarm:
             new_alarm = Alarm(
-                severity="WARNING",
-                status="ACTIVE",
-                timestamp_raised=now,
-                timestamp_cleared=None,
-                affected_object_type="link",
-                affected_object_id=updated_object.link_id_str,
+                severity="WARNING", status="ACTIVE", timestamp_raised=now,
+                affected_object_type="link", affected_object_id=updated_object.link_id_str,
                 description="High Utilization"
             )
             db.add(new_alarm)
             alarm_changed = True
-
-        # Cleare Alarm
         elif utilization <= 80 and existing_alarm:
             existing_alarm.status = "CLEARED"
             existing_alarm.timestamp_cleared = now
@@ -341,27 +316,20 @@ def check_thresholds_and_update_alarms(db, updated_object, **kwargs):
 
     # Device: ONT - Loss of Signal (LOS)
     if isinstance(updated_object, Device) and updated_object.type == "ONT":
-        signal_status = kwargs.get("signal_status")  # Übergeben von calculate_ont_power
+        signal_status = kwargs.get("signal_status")
         existing_alarm = db.query(Alarm).filter_by(
             affected_object_id=updated_object.device_id_str,
-            affected_object_type="device",
-            description="Loss of Signal",
-            status="ACTIVE"
+            affected_object_type="device", description="Loss of Signal", status="ACTIVE"
         ).first()
 
         if signal_status == "LOS" and not existing_alarm:
             new_alarm = Alarm(
-                severity="CRITICAL",
-                status="ACTIVE",
-                timestamp_raised=now,
-                timestamp_cleared=None,
-                affected_object_type="device",
-                affected_object_id=updated_object.device_id_str,
+                severity="CRITICAL", status="ACTIVE", timestamp_raised=now,
+                affected_object_type="device", affected_object_id=updated_object.device_id_str,
                 description="Loss of Signal"
             )
             db.add(new_alarm)
             alarm_changed = True
-
         elif signal_status != "LOS" and existing_alarm:
             existing_alarm.status = "CLEARED"
             existing_alarm.timestamp_cleared = now
@@ -369,14 +337,12 @@ def check_thresholds_and_update_alarms(db, updated_object, **kwargs):
 
     if alarm_changed:
         db.commit()
-        emit_full_state_updates(db)  # Push sofort neue Alarmliste!
+        emit_full_state_updates(db)
 
 
 def calculate_ont_power(db_session: DBSessionType, ont_id_str: str): 
-    """
-    Calculates the received optical power at a specific ONT.
-    """
-    graph = app_state["graph"] # Nutzt den In-Memory Graph
+    """Calculates the received optical power at a specific ONT."""
+    graph = app_state["graph"]
 
     try:
         olts = db_session.query(Device).filter_by(type='OLT').all()
@@ -436,10 +402,8 @@ def calculate_ont_power(db_session: DBSessionType, ont_id_str: str):
     else:
         signal_status = "LOS"
 
-    # --------- NEU: Alarmlogik aufrufen! ---------
     ont_device = db_session.query(Device).filter_by(device_id_str=ont_id_str).first()
     check_thresholds_and_update_alarms(db_session, ont_device, signal_status=signal_status)
-    # ---------------------------------------------
 
     return {"status": signal_status, "power_dbm": round(received_power, 2)}
 
@@ -467,7 +431,6 @@ def get_topology_stats_api():
 def get_events_api():
     return jsonify(["Events sind jetzt über WebSockets verfügbar."])
 
-
 @app.route('/api/history/status', methods=['GET'])
 def get_history_status_api():
     return jsonify(get_current_history_status())
@@ -485,7 +448,6 @@ def update_link_status(link_id_str: str):
         abort(404, description=f"Link with ID '{link_id_str}' not found.")
 
     main_command = UpdateLinkStatusCommand(db, link_id_str, payload.status)
-    
     composite_command = CompositeCommand(db) 
     composite_command.add(main_command)
     
@@ -529,19 +491,13 @@ def set_link_utilization(link_id_str: str):
     if not link:
         abort(404, description=f"Link with ID '{link_id_str}' not found.")
 
-    # Update utilization_percent im Link-Objekt
     props = link.properties or {}
     props['utilization_percent'] = utilization
     link.properties = props
     db.add(link)
-
-    # --- Alarmlogik triggern ---
     check_thresholds_and_update_alarms(db, link)
-
     db.commit()
     add_event(f"LINK-UTIL: Utilization of link '{link_id_str}' set to {utilization}%.")
-
-    # WebSocket-Update (Full State)
     emit_full_state_updates(db)
     return jsonify({"message": f"Utilization of link '{link_id_str}' set to {utilization}%."})
 
@@ -564,15 +520,13 @@ def trace_path():
     try:
         active_graph = nx.Graph() 
         active_graph.add_nodes_from([d.device_id_str for d in db.query(Device).all()]) 
-
         active_links = []
         for l in db.query(Link).all():
-            if l.status == 'up': 
+            if l.status == 'up' and l.source and l.target: 
                 active_links.append((l.source.device_id_str, l.target.device_id_str))
         active_graph.add_edges_from(active_links)
 
         path_nodes_str = nx.shortest_path(active_graph, source=start_node_str, target=end_node_str)
-        
         path_links_str = []
         for i in range(len(path_nodes_str) - 1):
             u_str, v_str = path_nodes_str[i], path_nodes_str[i+1]
@@ -582,9 +536,7 @@ def trace_path():
             ).first()
             if link_obj:
                 path_links_str.append(link_obj.link_id_str)
-
         return jsonify({"nodes": path_nodes_str, "links": path_links_str})
-
     except nx.NetworkXNoPath:
         return jsonify({"nodes": [], "links": []})
     except Exception as e:
@@ -607,7 +559,6 @@ def undo_last_action():
         db.rollback()
         abort(500, description=str(e))
 
-
 @app.route('/api/simulation/redo', methods=['POST'])
 def redo_last_action():
     db = g.db
@@ -625,7 +576,6 @@ def redo_last_action():
         db.rollback()
         abort(500, description=str(e))
 
-
 @app.route('/api/simulation/fiber-cut', methods=['POST'])
 def fiber_cut():
     db = g.db
@@ -640,7 +590,6 @@ def fiber_cut():
 
     descendant_nodes_str = nx.descendants(graph, cut_node_id_str)
     affected_nodes_set_str = descendant_nodes_str.union({cut_node_id_str})
-
     composite_command = CompositeCommand(db)
 
     for node_id_str in affected_nodes_set_str:
@@ -648,16 +597,10 @@ def fiber_cut():
         if device and device.status != 'offline':
             composite_command.add(UpdateDeviceStatusCommand(db, node_id_str, 'offline'))
 
-    # KORREKTUR: Finde alle Links, deren Source oder Target in affected_nodes_set_str liegt
-    # Wir müssen die internen Integer-IDs der Devices verwenden.
-    # Zuerst die Device-Objekte basierend auf ihren String-IDs abfragen
     affected_device_objs = db.query(Device).filter(Device.device_id_str.in_(affected_nodes_set_str)).all()
-    # Dann deren interne IDs sammeln
     device_ids_in_set = [d.id for d in affected_device_objs]
-
     affected_links = db.query(Link).filter(
-        (Link.source_id.in_(device_ids_in_set)) | 
-        (Link.target_id.in_(device_ids_in_set))
+        (Link.source_id.in_(device_ids_in_set)) | (Link.target_id.in_(device_ids_in_set))
     ).all()
 
     for link in affected_links:
@@ -685,38 +628,19 @@ def save_snapshot():
         abort(400, description="Snapshot name is required.")
 
     try:
-        # Topologie aus dem aktuellen Zustand holen
         topology_data = serialize_topology(db)
-        
-        # Ringe separat serialisieren (als list of dicts mit 'id', 'name', 'nodes', 'rpl_link_id')
-        rings = []
-        for ring in db.query(Ring).all():
-            rings.append({
-                "id": ring.ring_id_str,
-                "ring_id_str": ring.ring_id_str,
-                "name": ring.name,
-                "rpl_link_id": ring.rpl_link_id_str,
-                "nodes": [d.device_id_str for d in ring.nodes]
-            })
-
-        # Snapshot als vollständiges Objekt bauen
         snapshot = {
             "version": "1.0.0",
             "devices": topology_data["devices"],
             "links": topology_data["links"],
-            "rings": rings
+            "rings": topology_data["rings"]
         }
-
-        # Pfad vorbereiten
         SNAPSHOT_DIR = os.path.join(os.path.dirname(__file__), 'snapshots')
         if not os.path.exists(SNAPSHOT_DIR):
             os.makedirs(SNAPSHOT_DIR)
         snapshot_path = os.path.join(SNAPSHOT_DIR, f"{snapshot_name}.json")
-
-        # Schreiben
         with open(snapshot_path, 'w', encoding='utf-8') as f:
             json.dump(snapshot, f, indent=2)
-
         add_event(f"SYSTEM: Snapshot '{snapshot_name}' saved.")
         return jsonify({"message": "Snapshot saved."}), 201
     except Exception as e:
@@ -736,15 +660,10 @@ def load_snapshot():
         if not os.path.exists(snapshot_path):
             abort(404, "Snapshot not found.")
 
-        # Debug: Inhalt ausgeben
         with open(snapshot_path, 'r', encoding='utf-8') as f:
-            raw = f.read()
-            print("[DEBUG] Snapshot-Rohdaten:\n", raw)
-            snapshot_data = json.loads(raw)
+            snapshot_data = json.load(f)
 
         from sqlalchemy import text
-
-        # Reihenfolge: erst Zwischentabelle, dann Links/Ringe/Geräte
         db.execute(text("DELETE FROM ring_device_association"))
         db.query(Link).delete()
         db.query(Ring).delete()
@@ -761,6 +680,7 @@ def load_snapshot():
                 coordinates=device_data.get('coordinates')
             )
             db.add(new_device)
+            db.flush() # Flush to get ID
             device_map[device_data['id']] = new_device
         db.commit()
 
@@ -780,13 +700,7 @@ def load_snapshot():
         db.commit()
 
         for ring_data in snapshot_data.get('rings', []):
-            node_devices = []
-            for node_id_str in ring_data['nodes']:
-                device = device_map.get(node_id_str)
-                if not device:
-                    raise ValueError(f"Device '{node_id_str}' for ring '{ring_data['id']}' not found in snapshot.")
-                node_devices.append(device)
-
+            node_devices = [device_map[node_id] for node_id in ring_data['nodes']]
             new_ring = Ring(
                 ring_id_str=ring_data['id'],
                 name=ring_data['name'],
@@ -806,33 +720,33 @@ def load_snapshot():
     except Exception as e:
         db.rollback()
         abort(500, description=f"Failed to load snapshot: {str(e)}")
-        
+
 # --- WebSocket Event Handlers ---
 @socketio.on('connect')
 def handle_connect():
     print(f'Client verbunden: {request.sid}')
-    # Sende hier noch keine Daten, warte auf 'request_initial_data'
-
 
 @socketio.on('request_initial_data')
 def handle_initial_data_request():
-    """Sendet die komplette Topologie und initialen Status an einen neuen Client."""
-    db_session = SessionLocal() 
+    """Sendet die komplette Topologie aus der DB an einen neuen Client."""
+    db = SessionLocal()
     try:
-        print(f"Client {request.sid} fordert initiale Daten an (über WebSocket).")
-        full_topology_data = serialize_topology(db_session) 
-        current_stats = get_current_topology_stats(db_session) 
-        current_history_status = get_current_history_status()
+        full_topology = serialize_topology(db)
+        stats = get_current_topology_stats(db)
+        history_status = get_current_history_status()
+        active_alarms = db.query(Alarm).filter_by(status='ACTIVE').all()
+        serialized_alarms = [{"id": a.id, "severity": a.severity, "status": a.status, "timestamp_raised": a.timestamp_raised, "affected_object_type": a.affected_object_type, "affected_object_id": a.affected_object_id, "description": a.description} for a in active_alarms]
+        
         socketio.emit('initial_topology', {
-            'devices': full_topology_data['devices'],
-            'links': full_topology_data['links'],
-            'rings': full_topology_data['rings'],
-            'stats': current_stats,
-            'history_status': current_history_status
-        }, room=request.sid) 
+            'devices': full_topology['devices'],
+            'links': full_topology['links'],
+            'rings': full_topology['rings'],
+            'stats': stats,
+            'history_status': history_status,
+            'alarms': serialized_alarms
+        }, room=request.sid)
     finally:
-        db_session.close() 
-
+        db.close()
 
 @socketio.on('disconnect')
 def handle_disconnect():
@@ -844,6 +758,10 @@ if __name__ == '__main__':
     init_db()
     print("Schema initialisiert.")
 
+    # Seeding-Logik wird jetzt in seed.py aufgerufen
+    # from seed import seed_database
+    # seed_database()
+
     with SessionLocal() as db: 
         build_graph_from_db(db)
         initialize_rings(db) 
@@ -853,5 +771,6 @@ if __name__ == '__main__':
         os.makedirs(SNAPSHOT_DIR)
 
     add_event("SYSTEM: Backend started with PostgreSQL & WebSockets. Topology loaded, rings initialized.")
-    print("Starting UNOC Backend Server (v12 - Phase 4 DB/WS Integration)...")
+    print("Starting UNOC Backend Server...")
+    # Port 8000 for frontend, 5000 for backend
     socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)

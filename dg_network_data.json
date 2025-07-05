@@ -1,0 +1,339 @@
+[
+  {
+    "type": "FeatureCollection",
+    "name": "Deutsche Glasfaser Netzwerk - Schema Deutschland",
+    "crs": {
+      "type": "name",
+      "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" }
+    },
+    "features": [
+      {
+        "type": "Feature",
+        "properties": {
+          "name": "POP Düsseldorf",
+          "typ": "Core Node",
+          "standort": "Digital Realty DUS1/DUS2",
+          "peering": "MegaIX",
+          "peering_capacity_gbit": 400,
+          "as_numbers": "AS60294, AS8899",
+          "bundesland": "Nordrhein-Westfalen"
+        },
+        "geometry": { "type": "Point", "coordinates": [6.8672, 51.1883] }
+      },
+      {
+        "type": "Feature",
+        "properties": {
+          "name": "POP Frankfurt",
+          "typ": "Core Node",
+          "standort": "Digital Realty FRA16",
+          "peering": "DE-CIX",
+          "peering_capacity_gbit": 400,
+          "as_numbers": "AS60294, AS8899",
+          "bundesland": "Hessen"
+        },
+        "geometry": { "type": "Point", "coordinates": [8.7387, 50.1204] }
+      },
+      {
+        "type": "Feature",
+        "properties": {
+          "name": "POP Amsterdam",
+          "typ": "Core Node",
+          "standort": "Science Park 120",
+          "peering": "AMS-IX",
+          "peering_capacity_gbit": 100,
+          "as_numbers": "AS60294",
+          "bundesland": "International"
+        },
+        "geometry": { "type": "Point", "coordinates": [4.951, 52.356] }
+      },
+      {
+        "type": "Feature",
+        "properties": {
+          "source": "POP Düsseldorf",
+          "target": "POP Frankfurt",
+          "typ": "Backbone"
+        },
+        "geometry": {
+          "type": "LineString",
+          "coordinates": [
+            [6.8672, 51.1883],
+            [8.7387, 50.1204]
+          ]
+        }
+      },
+      {
+        "type": "Feature",
+        "properties": {
+          "source": "POP Düsseldorf",
+          "target": "POP Amsterdam",
+          "typ": "Backbone"
+        },
+        "geometry": {
+          "type": "LineString",
+          "coordinates": [
+            [6.8672, 51.1883],
+            [4.951, 52.356]
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "type": "FeatureCollection",
+    "name": "Deutsche Glasfaser Netzwerk - NRW",
+    "features": [
+      {
+        "type": "Feature",
+        "properties": { "name": "Ahaus", "typ": "POP", "status": "Ausgebaut", "bundesland": "Nordrhein-Westfalen" },
+        "geometry": { "type": "Point", "coordinates": [7.0097, 52.0747] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "name": "Borken", "typ": "POP", "status": "Ausgebaut", "bundesland": "Nordrhein-Westfalen" },
+        "geometry": { "type": "Point", "coordinates": [6.8592, 51.8436] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "name": "Coesfeld", "typ": "POP", "status": "Ausgebaut", "bundesland": "Nordrhein-Westfalen" },
+        "geometry": { "type": "Point", "coordinates": [7.166, 51.9449] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "name": "Dülmen", "typ": "POP", "status": "Ausgebaut", "bundesland": "Nordrhein-Westfalen" },
+        "geometry": { "type": "Point", "coordinates": [7.2796, 51.8315] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "name": "Rees", "typ": "POP", "status": "Ausgebaut", "bundesland": "Nordrhein-Westfalen" },
+        "geometry": { "type": "Point", "coordinates": [6.3967, 51.759] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Ahaus", "target": "POP Düsseldorf", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [7.0097, 52.0747], [6.8672, 51.1883] ] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Borken", "target": "POP Düsseldorf", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [6.8592, 51.8436], [6.8672, 51.1883] ] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Coesfeld", "target": "POP Düsseldorf", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [7.166, 51.9449], [6.8672, 51.1883] ] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Dülmen", "target": "POP Düsseldorf", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [7.2796, 51.8315], [6.8672, 51.1883] ] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Rees", "target": "POP Düsseldorf", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [6.3967, 51.759], [6.8672, 51.1883] ] }
+      }
+    ]
+  },
+  {
+    "type": "FeatureCollection",
+    "name": "Deutsche Glasfaser Netzwerk - Hessen",
+    "features": [
+      {
+        "type": "Feature",
+        "properties": { "name": "Limburg-Weilburg", "typ": "POP", "status": "Im Ausbau", "bundesland": "Hessen" },
+        "geometry": { "type": "Point", "coordinates": [8.15, 50.4] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "name": "Fulda (Landkreis)", "typ": "POP", "status": "Im Ausbau", "bundesland": "Hessen" },
+        "geometry": { "type": "Point", "coordinates": [9.6833, 50.55] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Limburg-Weilburg", "target": "POP Frankfurt", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [8.15, 50.4], [8.7387, 50.1204] ] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Fulda (Landkreis)", "target": "POP Frankfurt", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [9.6833, 50.55], [8.7387, 50.1204] ] }
+      }
+    ]
+  },
+  {
+    "type": "FeatureCollection",
+    "name": "Deutsche Glasfaser Netzwerk - Rheinland-Pfalz & Saarland",
+    "features": [
+      {
+        "type": "Feature",
+        "properties": { "name": "Polch", "typ": "POP", "status": "Ausgebaut", "bundesland": "Rheinland-Pfalz" },
+        "geometry": { "type": "Point", "coordinates": [7.3167, 50.3] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "name": "St. Wendel", "typ": "POP", "status": "Im Ausbau", "bundesland": "Saarland" },
+        "geometry": { "type": "Point", "coordinates": [7.1667, 49.4667] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Polch", "target": "POP Frankfurt", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [7.3167, 50.3], [8.7387, 50.1204] ] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "St. Wendel", "target": "POP Frankfurt", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [7.1667, 49.4667], [8.7387, 50.1204] ] }
+      }
+    ]
+  },
+  {
+    "type": "FeatureCollection",
+    "name": "Deutsche Glasfaser Netzwerk - Baden-Württemberg",
+    "features": [
+      {
+        "type": "Feature",
+        "properties": { "name": "Sinsheim", "typ": "POP", "status": "Im Ausbau", "bundesland": "Baden-Württemberg" },
+        "geometry": { "type": "Point", "coordinates": [8.8797, 49.2547] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "name": "Bretten", "typ": "POP", "status": "Im Ausbau", "bundesland": "Baden-Württemberg" },
+        "geometry": { "type": "Point", "coordinates": [8.705, 49.0361] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Sinsheim", "target": "POP Frankfurt", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [8.8797, 49.2547], [8.7387, 50.1204] ] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Bretten", "target": "POP Frankfurt", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [8.705, 49.0361], [8.7387, 50.1204] ] }
+      }
+    ]
+  },
+  {
+    "type": "FeatureCollection",
+    "name": "Deutsche Glasfaser Netzwerk - Bayern",
+    "features": [
+      {
+        "type": "Feature",
+        "properties": { "name": "Aichach-Friedberg", "typ": "POP", "status": "Im Ausbau", "bundesland": "Bayern" },
+        "geometry": { "type": "Point", "coordinates": [11.1, 48.4333] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "name": "Deggendorf (Landkreis)", "typ": "POP", "status": "Im Ausbau", "bundesland": "Bayern" },
+        "geometry": { "type": "Point", "coordinates": [12.9, 48.8167] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Aichach-Friedberg", "target": "POP Frankfurt", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [11.1, 48.4333], [8.7387, 50.1204] ] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Deggendorf (Landkreis)", "target": "POP Frankfurt", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [12.9, 48.8167], [8.7387, 50.1204] ] }
+      }
+    ]
+  },
+  {
+    "type": "FeatureCollection",
+    "name": "Deutsche Glasfaser Netzwerk - Niedersachsen",
+    "features": [
+      {
+        "type": "Feature",
+        "properties": { "name": "Gifhorn (Landkreis)", "typ": "POP", "status": "Im Ausbau", "bundesland": "Niedersachsen" },
+        "geometry": { "type": "Point", "coordinates": [10.55, 52.6] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "name": "Helmstedt (Landkreis)", "typ": "POP", "status": "Im Ausbau", "bundesland": "Niedersachsen" },
+        "geometry": { "type": "Point", "coordinates": [11, 52.25] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Gifhorn (Landkreis)", "target": "POP Düsseldorf", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [10.55, 52.6], [6.8672, 51.1883] ] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Helmstedt (Landkreis)", "target": "POP Düsseldorf", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [11, 52.25], [6.8672, 51.1883] ] }
+      }
+    ]
+  },
+  {
+    "type": "FeatureCollection",
+    "name": "Deutsche Glasfaser Netzwerk - Schleswig-Holstein",
+    "features": [
+      {
+        "type": "Feature",
+        "properties": { "name": "Rendsburg-Eckernförde", "typ": "POP", "status": "Im Ausbau", "bundesland": "Schleswig-Holstein" },
+        "geometry": { "type": "Point", "coordinates": [9.6667, 54.3] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "name": "Segeberg", "typ": "POP", "status": "Im Ausbau", "bundesland": "Schleswig-Holstein" },
+        "geometry": { "type": "Point", "coordinates": [10.3, 53.9] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Rendsburg-Eckernförde", "target": "POP Düsseldorf", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [9.6667, 54.3], [6.8672, 51.1883] ] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Segeberg", "target": "POP Düsseldorf", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [10.3, 53.9], [6.8672, 51.1883] ] }
+      }
+    ]
+  },
+  {
+    "type": "FeatureCollection",
+    "name": "Deutsche Glasfaser Netzwerk - Ostdeutschland",
+    "features": [
+      {
+        "type": "Feature",
+        "properties": { "name": "Landkreis Leipzig", "typ": "POP", "status": "Im Ausbau", "bundesland": "Sachsen" },
+        "geometry": { "type": "Point", "coordinates": [12.6, 51.25] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "name": "Börde", "typ": "POP", "status": "Im Ausbau", "bundesland": "Sachsen-Anhalt" },
+        "geometry": { "type": "Point", "coordinates": [11.3, 52.2] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "name": "Havelland", "typ": "POP", "status": "Im Ausbau", "bundesland": "Brandenburg" },
+        "geometry": { "type": "Point", "coordinates": [12.6667, 52.6667] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "name": "Ludwigslust-Parchim", "typ": "POP", "status": "Im Ausbau", "bundesland": "Mecklenburg-Vorpommern" },
+        "geometry": { "type": "Point", "coordinates": [11.75, 53.4167] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Landkreis Leipzig", "target": "POP Frankfurt", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [12.6, 51.25], [8.7387, 50.1204] ] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Börde", "target": "POP Frankfurt", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [11.3, 52.2], [8.7387, 50.1204] ] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Havelland", "target": "POP Frankfurt", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [12.6667, 52.6667], [8.7387, 50.1204] ] }
+      },
+      {
+        "type": "Feature",
+        "properties": { "source": "Ludwigslust-Parchim", "target": "POP Frankfurt", "typ": "Regional" },
+        "geometry": { "type": "LineString", "coordinates": [ [11.75, 53.4167], [8.7387, 50.1204] ] }
+      }
+    ]
+  }
+]

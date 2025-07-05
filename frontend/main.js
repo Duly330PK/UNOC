@@ -1,50 +1,93 @@
 /*
- * UNOC - main.js (v5 - WebSocket Client)
+ * UNOC - main.js (v6 - GeoJSON & Zoom-Logik Integration)
  */
 
 // --- Globale Variablen & Zustand ---
 const backendUrl = "http://127.0.0.1:5000";
-let socket = null; // NEU: WebSocket-Instanz
+let socket = null;
 let network = null, map = null, nodes = new vis.DataSet([]), edges = new vis.DataSet([]);
-let mapMarkers = {}, mapLines = {}, currentView = 'topo', eventPollInterval = null;
+let mapMarkers = {}, mapLines = {}, currentView = 'topo';
 let highlightedPath = { nodes: [], links: [] };
 let selectedId = null;
 let selectedType = null; // 'device' oder 'link'
 
+// NEU: Konfiguration für die Kartenansicht
+const ZOOM_THRESHOLD = 7; // Ab welchem Zoom-Level werden regionale Details sichtbar?
+
 const statusToColor = {
-    online: { border: "#4CAF50", background: "#2e7d32" }, offline: { border: "#F44336", background: "#c62828" },
-    maintenance: { border: "#FFC107", background: "#ffa000" }, up: { color: "#4CAF50", highlight: "#66BB6A" },
-    down: { color: "#F44336", highlight: "#EF5350" }, degraded: { color: "#FFC107", highlight: "#FFCA28" },
+    online: { border: "#4CAF50", background: "#2e7d32" },
+    offline: { border: "#F44336", background: "#c62828" },
+    maintenance: { border: "#FFC107", background: "#ffa000" },
+    up: { color: "#4CAF50", highlight: "#66BB6A" },
+    down: { color: "#F44336", highlight: "#EF5350" },
+    degraded: { color: "#FFC107", highlight: "#FFCA28" },
     blocking: { color: "#FFC107", highlight: "#FFCA28" }
 };
+
 const getEdgeLeafletColor = (status) => (statusToColor[status] || { color: '#9E9E9E' }).color;
 
-const formatDeviceToNode = d => ({
-    id: d.device_id_str,
-    label: `${d.type}\n(${d.device_id_str})`,
-    shape: 'box',
-    borderWidth: 1,
-    color: statusToColor[d.status],
-    font: { color: '#ffffff' },
-    data: d
-});
+// --- Formatierungsfunktionen ---
 
-const formatLinkToEdge = l => ({
-    id: l.link_id_str,
-    from: l.source,
-    to: l.target,
-    width: 1,
-    color: (statusToColor[l.status] || {}).color,
-    arrows: 'to, from',
-    dashes: l.status === 'blocking' ? [5, 5] : false,
-    data: l,
-    label: l.link_id_str,
-    font: { color: '#aaa', size: 11, align: 'top', strokeWidth: 3, strokeColor: '#1a1a1a' }
-});
+function formatDeviceToNode(d) {
+    const node = {
+        id: d.id, // ID ist jetzt die device_id_str
+        label: d.type === 'POP' || d.type === 'Core Node' ? d.id : `${d.type}\n(${d.id})`,
+        shape: 'box',
+        borderWidth: 1,
+        color: statusToColor[d.status],
+        font: { color: '#ffffff' },
+        data: d,
+    };
+
+    // Spezifische Stile für neue Typen
+    if (d.type === 'Core Node') {
+        node.shape = 'database';
+        node.color = { border: '#00BFFF', background: '#202A40' };
+        node.size = 25;
+        node.font = { color: '#00BFFF', size: 14 };
+    } else if (d.type === 'POP') {
+        node.shape = 'box';
+        node.color = { border: '#8A2BE2', background: '#301934' };
+    }
+
+    return node;
+}
+
+function formatLinkToEdge(l) {
+    const edge = {
+        id: l.id, // ID ist jetzt die link_id_str
+        from: l.source,
+        to: l.target,
+        width: 2, // Standardbreite
+        color: (statusToColor[l.status] || {}).color || '#9E9E9E',
+        arrows: 'to, from',
+        dashes: l.status === 'blocking' ? [5, 5] : false,
+        data: l,
+        label: l.properties?.typ,
+        font: { color: '#aaa', size: 11, align: 'top', strokeWidth: 3, strokeColor: '#1a1a1a' }
+    };
+
+    // NEU: Logik zur Überschreibung der Stile für Backbone- und Regional-Links
+    const props = l.properties;
+    if (props && props.typ) {
+        if (props.typ === 'Backbone') {
+            edge.color = { color: '#FF4500' }; // Orangered
+            edge.width = 4;
+            edge.dashes = [10, 10];
+            edge.label = 'Backbone';
+        } else if (props.typ === 'Regional') {
+            edge.color = { color: '#8A2BE2' }; // BlueViolet
+            edge.width = 2.5;
+            edge.dashes = [5, 5];
+            edge.label = 'Regional';
+        }
+    }
+    return edge;
+}
 
 // --- Initialisierung ---
 async function initialize() {
-    initializeWebSocket(); // NEU: WebSocket-Verbindung aufbauen
+    initializeWebSocket();
 }
 
 function initializeWebSocket() {
@@ -60,58 +103,63 @@ function initializeWebSocket() {
         
         nodes.clear();
         edges.clear();
-        nodes.add(data.devices.map(formatDeviceToNode));
-        edges.add(data.links.map(formatLinkToEdge));
+        
+        const formattedNodes = data.devices.map(d => formatDeviceToNode({ ...d, id: d.id }));
+        const formattedEdges = data.links.map(l => formatLinkToEdge({ ...l, id: l.id }));
+
+        nodes.add(formattedNodes);
+        edges.add(formattedEdges);
 
         if (!network) {
             const container = document.getElementById('network-container');
             network = new vis.Network(container, { nodes, edges }, { interaction: { hover: true } });
-            setupEventListeners(); 
-        } 
+            setupEventListeners();
+        }
         
-        updateRingPanel(data); 
-        initializeMapView(data); 
+        if(data.rings) updateRingPanel(data);
+        initializeMapView(data);
 
         const splitterSelect = document.getElementById('splitter-select');
         splitterSelect.innerHTML = '';
         data.devices.filter(d => d.type.toLowerCase() === 'splitter').forEach(d => {
             const option = document.createElement('option');
-            option.value = d.device_id_str; 
-            option.textContent = d.device_id_str;
+            option.value = d.id;
+            option.textContent = d.id;
             splitterSelect.appendChild(option);
         });
 
-        updateHud(data.stats); 
-        updateHistoryButtons(data.history_status); 
+        if (data.stats) updateHud(data.stats);
+        if (data.history_status) updateHistoryButtons(data.history_status);
+        if (data.alarms) updateAlarms(data.alarms);
     });
 
-    socket.on('topology_update', (update) => {
-        console.log("Update empfangen:", update);
-        if (update.type === 'link') {
-            edges.update(formatLinkToEdge(update.data));
-            syncMapWithState({ links: [update.data] }); 
-        } else if (update.type === 'device') {
-            nodes.update(formatDeviceToNode(update.data));
+    socket.on('full_state_update', (data) => {
+        console.log("Full State Update empfangen:", data);
+        
+        const updatedNodes = data.devices.map(d => formatDeviceToNode({ ...d, id: d.id }));
+        nodes.update(updatedNodes);
+
+        const updatedLinks = data.links.map(l => formatLinkToEdge({ ...l, id: l.id }));
+        edges.update(updatedLinks);
+
+        updateHud(data.stats);
+        updateHistoryButtons(data.history_status);
+        updateRingPanel(data);
+        updateAlarms(data.alarms);
+        syncMapWithState(data);
+
+        if (selectedId) {
+            const selectedData = data.devices.find(d => d.id === selectedId) || data.links.find(l => l.id === selectedId);
+            if (selectedData) renderProperties(selectedData);
         }
     });
-
-    socket.on('stats_update', (stats) => { 
-        console.log("Stats Update empfangen:", stats);
-        updateHud(stats);
-    });
-
-    socket.on('history_status_update', (status) => { 
-        console.log("History Status Update empfangen:", status);
-        updateHistoryButtons(status);
-    });
-
+    
     socket.on('new_event', (event_message) => {
-        console.log("Neues Event empfangen:", event_message);
         const eventLog = document.getElementById('event-log');
         const newLi = document.createElement('li');
         newLi.textContent = event_message;
         if (eventLog.firstChild && eventLog.firstChild.classList.contains('loader')) {
-            eventLog.innerHTML = ''; 
+            eventLog.innerHTML = '';
         }
         eventLog.prepend(newLi);
         while (eventLog.children.length > 100) {
@@ -119,134 +167,30 @@ function initializeWebSocket() {
         }
     });
 
-    // --- WebSocket Event Handler für Alarmdaten ---
-    socket.on('full_state_update', (data) => {
-    updateAlarms(data.alarms);
-
-    // Sticky Properties-Panel: Auswahl nachladen
-    if (selectedId && selectedType) {
-        if (selectedType === "device") {
-            const found = data.devices.find(d => d.device_id_str === selectedId);
-            if (found) renderProperties(found);
-        } else if (selectedType === "link") {
-            const found = data.links.find(l => l.link_id_str === selectedId);
-            if (found) renderProperties(found);
-        }
-    }
-});
-
-
     socket.on('disconnect', () => {
-        console.log("Verbindung zum WebSocket-Server getrennt!");
         showModal('Verbindung getrennt', 'Verbindung zum Backend verloren. Bitte Seite neu laden.', [{ text: 'OK', class: 'modal-btn-danger', callback: () => window.location.reload() }]);
     });
-
-     socket.on("ont_power_update", ({ ont_id, status, power_dbm }) => {
-        console.log(`ONT Power Update für ${ont_id}: ${power_dbm} dBm (${status})`);
-
-        const node = nodes.get(ont_id);
-        if (!node) return;
-
-        // Update in nodes
-        const updatedNode = {
-            ...node,
-            data: {
-                ...node.data,
-                properties: {
-                    ...(node.data.properties || {}),
-                    signal_status: status,
-                    received_power_dbm: power_dbm
-                }
-            }
-        };
-        nodes.update(updatedNode);
-
-        // Optional: Wenn dieser ONT gerade im Properties-Fenster ist, neu rendern
-        const selectedId = document.querySelector('#properties-content table th')?.textContent;
-        if (selectedId && selectedId.includes(ont_id)) {
-            renderProperties(updatedNode.data);
-        }
-    });
-
 }
 
-// --- Alarm-Anzeige aktualisieren ---
+// --- UI-Update-Funktionen ---
+
 function updateAlarms(alarms) {
     const hudAlarms = document.getElementById('hud-alarms');
-    hudAlarms.textContent = alarms.length;
-    hudAlarms.style.color = alarms.length > 0 ? 'var(--accent-red)' : 'var(--accent-green)';
+    hudAlarms.textContent = alarms ? alarms.length : 0;
+    hudAlarms.style.color = (alarms && alarms.length > 0) ? 'var(--accent-red)' : 'var(--accent-green)';
 
-    // Alle Icons zurücksetzen
     nodes.update(nodes.getIds().map(id => ({ id, icon: undefined })));
 
-    // Alarm-Icons setzen
-    alarms.forEach(alarm => {
-        if (alarm.affected_object_type === 'device') {
-            nodes.update({
-                id: alarm.affected_object_id,
-                icon: { face: "'Font Awesome 5 Free'", code: '\uf071', size: 50, color: 'red' }
-            });
-        }
-    });
-}
-function refreshTopologyDisplay(topologyData) {
-    nodes.clear();
-    edges.clear();
-    nodes.add(topologyData.devices.map(formatDeviceToNode));
-    edges.add(topologyData.links.map(formatLinkToEdge));
-    updateRingPanel(topologyData);
-    initializeMapView(topologyData); 
-}
-
-function initializeMapView(topology) {
-    if (!map) { 
-        const mapContainer = document.getElementById('map-container');
-        if (mapContainer) { 
-            map = L.map(mapContainer).setView([51.96, 7.62], 10);
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-                attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 20
-            }).addTo(map);
-        } else {
-            console.error("Map container not found!");
-            return;
-        }
-    } else {
-        Object.values(mapMarkers).forEach(marker => marker.remove());
-        Object.values(mapLines).forEach(line => line.remove());
-        mapMarkers = {}; 
-        mapLines = {};
+    if (alarms) {
+        alarms.forEach(alarm => {
+            if (alarm.affected_object_type === 'device') {
+                nodes.update({
+                    id: alarm.affected_object_id,
+                    icon: { face: "'Font Awesome 5 Free'", code: '\uf071', size: 50, color: 'red' }
+                });
+            }
+        });
     }
-
-    topology.devices.forEach(device => { 
-        if (device.coordinates) {
-            mapMarkers[device.device_id_str] = L.marker(device.coordinates)
-                .addTo(map)
-                .bindPopup(`<b>${device.device_id_str}</b><br>${device.type}`); 
-        }
-    });
-
-    topology.links.forEach(link => {
-        const source = topology.devices.find(d => d.device_id_str === link.source); 
-        const target = topology.devices.find(d => d.device_id_str === link.target); 
-        if (source?.coordinates && target?.coordinates) {
-            mapLines[link.link_id_str] = L.polyline(
-                [source.coordinates, target.coordinates],
-                { color: getEdgeLeafletColor(link.status), weight: 3, dashArray: link.status === 'blocking' ? '5, 5' : null }
-            ).addTo(map);
-        }
-    });
-}
-
-function syncMapWithState(topology_partial) { 
-    if (!map) return;
-    topology_partial.links.forEach(link => {
-        if (mapLines[link.link_id_str]) {
-            mapLines[link.link_id_str].setStyle({
-                color: getEdgeLeafletColor(link.status),
-                dashArray: link.status === 'blocking' ? '5, 5' : null
-            });
-        }
-    });
 }
 
 function updateHud(stats) {
@@ -264,13 +208,13 @@ function updateHistoryButtons(status) {
 
 function updateRingPanel(topology) {
     const ringInfoDiv = document.getElementById('ring-info');
-    if (!topology.rings?.length) {
+    if (!topology.rings || !topology.rings.length) {
         ringInfoDiv.innerHTML = '<span class="loader">Keine Ringe definiert.</span>';
         return;
     }
     let html = '<table>';
     topology.rings.forEach(ring => {
-        const rpl = topology.links.find(l => l.link_id_str === ring.rpl_link_id_str); 
+        const rpl = topology.links.find(l => l.id === ring.rpl_link_id);
         if (rpl) {
             const statusClass = rpl.status === 'blocking' ? 'status-blocking' : 'status-forwarding';
             html += `<tr><td><b>${ring.name}</b></td><td class="${statusClass}">${rpl.status.toUpperCase()}</td></tr>`;
@@ -278,6 +222,127 @@ function updateRingPanel(topology) {
     });
     ringInfoDiv.innerHTML = html + '</table>';
 }
+
+// --- Karten- & Zoom-Logik ---
+
+// --- Karten- & Zoom-Logik ---
+
+function initializeMapView(topology) {
+    if (!map) {
+        const mapContainer = document.getElementById('map-container');
+        if (mapContainer) {
+            map = L.map(mapContainer).setView([51.5, 10.5], 6); // Start-Zoom auf Deutschland
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 20
+            }).addTo(map);
+
+            map.on('zoomend', handleZoom);
+        } else {
+            console.error("Map container not found!");
+            return;
+        }
+    }
+    
+    Object.values(mapMarkers).forEach(marker => marker.remove());
+    Object.values(mapLines).forEach(line => line.remove());
+    mapMarkers = {};
+    mapLines = {};
+
+    // Erstellt die Marker und fügt den Klick-Handler hinzu
+    topology.devices.forEach(device => {
+        if (device.coordinates && device.coordinates.length === 2) {
+            const marker = L.marker([device.coordinates[1], device.coordinates[0]])
+                .addTo(map)
+                .bindPopup(`<b>${device.id}</b><br>${device.type}`);
+
+            // Klick-Event-Handler für den Marker hinzugefügt
+            marker.on('click', () => {
+                selectedId = device.id;
+                selectedType = 'device';
+                renderProperties(device);
+                if (network) {
+                    network.selectNodes([device.id]);
+                }
+            });
+
+            mapMarkers[device.id] = marker;
+        }
+    });
+
+    // Erstellt die Linien zwischen den Markern
+    topology.links.forEach(link => {
+        const source = topology.devices.find(d => d.id === link.source);
+        const target = topology.devices.find(d => d.id === link.target);
+        if (source?.coordinates && target?.coordinates) {
+            const latlngs = [
+                [source.coordinates[1], source.coordinates[0]],
+                [target.coordinates[1], target.coordinates[0]]
+            ];
+            mapLines[link.id] = L.polyline(latlngs).addTo(map);
+        }
+    });
+
+    // Diese Aufrufe gehören an das Ende von initializeMapView
+    syncMapWithState(topology);
+    handleZoom();
+} // <-- Die Funktion initializeMapView endet hier.
+
+
+// Die folgenden Funktionen sind jetzt korrekt außerhalb definiert.
+function syncMapWithState(topology) {
+    if (!map) return;
+    
+    topology.links.forEach(link => {
+        if (mapLines[link.id]) {
+            const props = link.properties;
+            let style = { color: getEdgeLeafletColor(link.status), weight: 2 };
+
+            if (props?.typ === 'Backbone') {
+                style.weight = 5;
+                style.color = '#FF4500';
+                style.dashArray = '15, 15';
+            } else if (props?.typ === 'Regional') {
+                style.weight = 3;
+                style.color = '#8A2BE2';
+                style.dashArray = '8, 8';
+            } else if (link.status === 'blocking') {
+                style.dashArray = '5, 5';
+            }
+            
+            mapLines[link.id].setStyle(style);
+        }
+    });
+}
+
+function handleZoom() {
+    if (!map) return;
+    const zoomLevel = map.getZoom();
+
+    for (const deviceId in mapMarkers) {
+        const marker = mapMarkers[deviceId];
+        const node = nodes.get(deviceId);
+        if (!node) continue;
+        
+        if (node.data.type === 'Core Node') {
+            marker.setOpacity(1); // Core Nodes sind immer sichtbar.
+        } else {
+            marker.setOpacity(zoomLevel > ZOOM_THRESHOLD ? 1 : 0);
+        }
+    }
+
+    for (const linkId in mapLines) {
+        const line = mapLines[linkId];
+        const edge = edges.get(linkId);
+        if (!edge) continue;
+
+        if (edge.data.properties?.typ === 'Backbone') {
+            line.setStyle({ opacity: 1 }); // Backbone-Links sind immer sichtbar.
+        } else {
+            line.setStyle({ opacity: zoomLevel > ZOOM_THRESHOLD ? 1 : 0 });
+        }
+    }
+}
+// --- Eigenschaften-Panel & Interaktion ---
 
 async function renderProperties(dataToShow) {
     const contentDiv = document.getElementById('properties-content');
@@ -287,26 +352,32 @@ async function renderProperties(dataToShow) {
     }
 
     let table = '<table>';
-    for (const [k, v] of Object.entries(dataToShow)) {
-        if (k === 'properties') continue;
-        let displayValue = v;
-        if (k === 'coordinates' && Array.isArray(v)) displayValue = `${v[0].toFixed(4)}, ${v[1].toFixed(4)}`;
-        else if (typeof v === 'object' && v !== null) displayValue = JSON.stringify(v);
-        table += `<tr><th style="text-transform: capitalize;">${k.replace('_str', '').replace('_id', ' ID')}</th><td>${displayValue}</td></tr>`;
+    // Basis-Eigenschaften
+    table += `<tr><th>ID</th><td>${dataToShow.id}</td></tr>`;
+    table += `<tr><th>Typ</th><td>${dataToShow.type}</td></tr>`;
+    if (dataToShow.status) table += `<tr><th>Status</th><td>${dataToShow.status}</td></tr>`;
+
+    // NEU: Spezifische Anzeige für Core Nodes
+    if (dataToShow.type === 'Core Node') {
+        const props = dataToShow.properties;
+        table += '</table><h3 style="text-align:center; background-color: #333; margin: 15px 0 0; padding: 8px;">Core Network Details</h3><table>';
+        table += `<tr><th>Standort</th><td>${props.standort || 'N/A'}</td></tr>`;
+        table += `<tr><th>Peering</th><td>${props.peering || 'N/A'}</td></tr>`;
+        table += `<tr><th>Kapazität</th><td>${props.peering_capacity_gbit || 'N/A'} Gbit/s</td></tr>`;
+        table += `<tr><th>AS-Nummern</th><td>${props.as_numbers || 'N/A'}</td></tr>`;
+    } 
+    // Anzeige der generischen Properties
+    else if (dataToShow.properties && Object.keys(dataToShow.properties).length > 0) {
+        table += '</table><h3 style="text-align:center; background-color: #333; margin: 15px 0 0; padding: 8px;">Properties</h3><table>';
+        for (const [propKey, propValue] of Object.entries(dataToShow.properties)) {
+            table += `<tr><th>${propKey}</th><td>${JSON.stringify(propValue)}</td></tr>`;
+        }
     }
     table += '</table>';
 
-    if (dataToShow.properties && Object.keys(dataToShow.properties).length > 0) {
-        table += `<h3 style="text-align:center; background-color: #333; margin: 15px 0 0; padding: 8px;">Properties</h3>`;
-        table += `<table>`;
-        for (const [propKey, propValue] of Object.entries(dataToShow.properties)) {
-            table += `<tr><th style="padding-left: 20px;">${propKey}</th><td>${propValue}</td></tr>`;
-        }
-        table += `</table>`;
-    }
-
     contentDiv.innerHTML = table;
-
+    
+    // Signalpegel-Logik für ONTs
     if (dataToShow.type === 'ONT') {
         try {
             const response = await fetch(`${backendUrl}/api/devices/${dataToShow.id}/signal`);
@@ -324,22 +395,37 @@ async function renderProperties(dataToShow) {
 
             if (signalCellHTML) {
                 const tableElement = contentDiv.querySelector('table');
-                if (tableElement)
-                    tableElement.innerHTML += `<tr><th style="text-align:center;" colspan="2">Signal Level</th></tr><tr>${signalCellHTML}</tr>`;
+                if (tableElement) {
+                    // Find the last table to append to
+                    const tables = contentDiv.querySelectorAll('table');
+                    const lastTable = tables[tables.length - 1];
+                    lastTable.innerHTML += `<tr><th style="text-align:center;" colspan="2">Signal Level</th></tr><tr>${signalCellHTML}</tr>`;
+                }
             }
         } catch (e) {
             console.error("Fehler beim Abrufen des Signalpegels:", e);
         }
     }
 }
+
+
 function toggleView() {
     const mapContainer = document.getElementById('map-container');
+    const networkContainer = document.getElementById('network-container');
     const toggleBtn = document.getElementById('toggle-btn');
-    const isTopo = currentView === 'topo';
-    mapContainer.style.visibility = isTopo ? 'visible' : 'hidden';
-    toggleBtn.textContent = isTopo ? 'Topologieansicht' : 'Kartenansicht';
-    currentView = isTopo ? 'map' : 'topo';
-    if (isTopo) map.invalidateSize();
+    
+    if (currentView === 'topo') {
+        mapContainer.style.visibility = 'visible';
+        networkContainer.style.visibility = 'hidden';
+        toggleBtn.textContent = 'Topologieansicht';
+        currentView = 'map';
+        if (map) map.invalidateSize(); // Wichtig, damit die Karte korrekt gerendert wird
+    } else {
+        mapContainer.style.visibility = 'hidden';
+        networkContainer.style.visibility = 'visible';
+        toggleBtn.textContent = 'Kartenansicht';
+        currentView = 'topo';
+    }
 }
 
 function showModal(title, message, buttons = [{ text: 'OK', class: 'modal-btn-primary', callback: hideModal }]) {
@@ -351,7 +437,10 @@ function showModal(title, message, buttons = [{ text: 'OK', class: 'modal-btn-pr
         const button = document.createElement('button');
         button.textContent = btnInfo.text;
         button.className = btnInfo.class || 'modal-btn-secondary';
-        button.onclick = () => { hideModal(); if (btnInfo.callback) btnInfo.callback(); };
+        button.onclick = () => {
+            hideModal();
+            if (btnInfo.callback) btnInfo.callback();
+        };
         buttonContainer.appendChild(button);
     });
     document.getElementById('modal-overlay').classList.remove('hidden');
@@ -363,25 +452,21 @@ function hideModal() {
 
 function setupEventListeners() {
     network.on('click', params => {
-        if (params.nodes.length === 0 && params.edges.length === 0) {
-            setTimeout(() => resetHighlight(), 0);
-        }
         const elementId = params.nodes[0] || params.edges[0];
-        const dataset = params.nodes.length ? nodes : edges;
-        if (params.nodes.length) {
-    selectedId = params.nodes[0];
-    selectedType = "device";
-    renderProperties(nodes.get(selectedId).data);
-} else if (params.edges.length) {
-    selectedId = params.edges[0];
-    selectedType = "link";
-    renderProperties(edges.get(selectedId).data);
-} else {
-    selectedId = null;
-    selectedType = null;
-    setTimeout(() => resetHighlight(), 0);
-    renderProperties(null);
-}
+        if (elementId) {
+            selectedId = elementId;
+            selectedType = params.nodes.length ? 'device' : 'link';
+            const dataSet = selectedType === 'device' ? nodes : edges;
+            const itemData = dataSet.get(selectedId);
+            if (itemData) {
+                 renderProperties(itemData.data || itemData); // data-Attribut bei gruppierten Nodes
+            }
+        } else {
+            selectedId = null;
+            selectedType = null;
+            renderProperties(null);
+            resetHighlight();
+        }
     });
 
     document.getElementById('toggle-btn').addEventListener('click', toggleView);
@@ -401,6 +486,8 @@ function setupEventListeners() {
         }
     });
 }
+
+// --- Aktionen & CLI ---
 
 async function postAction(endpoint, payload = {}) {
     try {
@@ -422,8 +509,9 @@ async function postAction(endpoint, payload = {}) {
             }
         }
 
-        if (endpoint.includes('load')) {
-            initialize();
+        if (endpoint.includes('/api/snapshot/load')) {
+            // Nach dem Laden eines Snapshots, fordern wir die neuen Daten an
+            socket.emit('request_initial_data');
         }
 
         return true;
@@ -452,8 +540,11 @@ function simulateFiberCut() {
 
 function saveSnapshot() {
     const name = document.getElementById('snapshot-name').value.trim();
-    if (name) postAction('/api/snapshot/save', { name });
-    else showModal('Fehler', 'Bitte einen Namen für den Snapshot eingeben.');
+    if (name) {
+        postAction('/api/snapshot/save', { name });
+    } else {
+        showModal('Fehler', 'Bitte einen Namen für den Snapshot eingeben.');
+    }
 }
 
 function loadSnapshot() {
@@ -471,12 +562,12 @@ function loadSnapshot() {
         showModal('Fehler', 'Bitte den Namen des zu ladenden Snapshots eingeben.');
     }
 }
+
 const KNOWN_COMMANDS = [
     'help', 'undo', 'redo', 'cut', 'fiber-cut',
     'link-down', 'link-up', 'link-degraded',
-    'trace', 'link-util'  // NEU HINZUGEFÜGT!
+    'trace', 'link-util'
 ];
-
 
 function debounce(func, delay) {
     let timeout;
@@ -532,7 +623,6 @@ async function handleCliCommand(inputElement) {
         showCliOutput(`Unbekannter Befehl: '${command}'.`, 'error');
     }
 }
-
 
 async function tracePath(startNode, endNode) {
     resetHighlight();
@@ -627,6 +717,7 @@ function handleCliKeyDown(event) {
         clearSuggestions();
     }
 }
+
 function handleAutocomplete(event) {
     const text = event.target.value;
     const parts = text.split(' ');
@@ -668,7 +759,7 @@ function handleAutocomplete(event) {
 
 function renderSuggestions(suggestions, baseCommand) {
     const container = document.getElementById('cli-suggestions');
-    if (suggestions.length === 0) {
+    if (!container || suggestions.length === 0) {
         clearSuggestions();
         return;
     }
@@ -681,7 +772,7 @@ function selectSuggestion(baseCommand, id) {
     const inputElement = document.getElementById('cli-input');
     inputElement.value = (baseCommand ? `${baseCommand} ` : '') + `${id} `;
     inputElement.focus();
-    inputElement.dispatchEvent(new Event('keyup', { bubbles: true }));
+    clearSuggestions();
 }
 
 function clearSuggestions() {
@@ -689,16 +780,5 @@ function clearSuggestions() {
     if (container) container.innerHTML = '';
 }
 
-function resetHighlight() {
-    if (network) {
-        network.unselectAll();
-    }
-
-    selectedDevice = null;
-    selectedLink = null;
-
-    renderProperties(null);
-    console.log("Highlight reset");
-}
-
+// --- Start ---
 document.addEventListener('DOMContentLoaded', initialize);
