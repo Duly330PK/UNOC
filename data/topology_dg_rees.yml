@@ -1,0 +1,124 @@
+#
+# UNOC - topology_dg_rees.yml
+#
+# Detaillierte Referenz-Topologie für das Ausbaugebiet Rees (Kreis Kleve).
+# Dient als Grundlage für die Simulation der Netzebene 3 und 4.
+#
+
+version: "1.0.0"
+
+devices:
+  - id: POP-REES-01
+    type: POP
+    status: online
+    properties:
+      name: "Point of Presence Rees"
+      standort: "Rees (Modellierter Standort)"
+    coordinates: [6.3967, 51.759]
+
+  - id: ODF-REES-01
+    type: ODF
+    status: online
+    properties:
+      name: "ODF im POP Rees"
+      capacity: 5760 # Max. Fasern
+
+  - id: OLT-REES-01
+    type: OLT
+    status: online
+    properties:
+      name: "OLT-1 im POP Rees"
+      power_class: "C+"
+      transmit_power_dbm: 5.0
+      supported_technologies: ["GPON", "XGS-PON"]
+
+  - id: NVT-REES-ZENTRUM
+    type: NVt
+    status: online
+    properties:
+      name: "Netzverteiler Rees Zentrum"
+      model: "CCM NVt 80"
+      capacity_splicing: 1872
+      
+  - id: SPLITTER-REES-ZENTRUM-01
+    type: Splitter
+    status: online
+    properties:
+      split_ratio: "1:32"
+      insertion_loss_db: 17.8
+
+  - id: HUP-MUSTERA-1
+    type: HÜP
+    status: online
+    properties:
+      address: "Musterstraße 1, 46459 Rees"
+      
+  - id: ONT-MUSTERA-1
+    type: ONT
+    status: online
+    properties:
+      technology: "GPON"
+      sensitivity_min_dbm: -30.0
+
+links:
+  # HINZUGEFÜGT: Verbindung vom POP zum ODF, um die Hierarchie zu schließen
+  - id: link-pop-odf-rees
+    source: POP-REES-01
+    target: ODF-REES-01
+    status: up
+    properties:
+      type: "PoP Internal"
+      length_km: 0.005
+      connector_count: 2
+
+  # Verbindung innerhalb des PoP
+  - id: link-olt-odf-rees
+    source: OLT-REES-01
+    target: ODF-REES-01
+    status: up
+    properties:
+      type: "Patchkabel"
+      length_km: 0.01
+      connector_count: 2
+
+  # Feeder-Kabel vom PoP zum Netzverteiler
+  - id: link-odf-nvt-rees
+    source: ODF-REES-01
+    target: NVT-REES-ZENTRUM
+    status: up
+    properties:
+      type: "Feeder-Kabel"
+      length_km: 1.2
+      splice_count: 1
+      connector_count: 2
+
+  # Verbindung innerhalb des NVt (zum Splitter)
+  - id: link-nvt-splitter-rees
+    source: NVT-REES-ZENTRUM
+    target: SPLITTER-REES-ZENTRUM-01
+    status: up
+    properties:
+      type: "Patchkabel"
+      length_km: 0.005
+      connector_count: 2
+
+  # Verteilkabel vom Splitter zum Haus
+  - id: link-splitter-hup-rees
+    source: SPLITTER-REES-ZENTRUM-01
+    target: HUP-MUSTERA-1
+    status: up
+    properties:
+      type: "Verteilkabel"
+      length_km: 0.35
+      splice_count: 1
+      connector_count: 2
+
+  # Inhouse-Verkabelung vom HÜP zum ONT
+  - id: link-hup-ont-rees
+    source: HUP-MUSTERA-1
+    target: ONT-MUSTERA-1
+    status: up
+    properties:
+      type: "Inhouse-Kabel"
+      length_km: 0.02
+      connector_count: 2
