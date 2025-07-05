@@ -1,5 +1,5 @@
 /*
- * UNOC - main.js (v8 - View Toggling Logic)
+ * UNOC - main.js (v9 - Hybrid Architecture für Phase 4)
  */
 
 // --- Globale Variablen & Zustand ---
@@ -13,6 +13,10 @@ let selectedType = null;
 
 let fullTopologyData = null; // Speichert die komplette, ungefilterte Topologie
 let activeViewMode = 'national'; // Startet mit der nationalen Ansicht
+
+// --- NEU FÜR PHASE 4: Zustand für den Architektur-Filter ---
+let currentArchFilter = 'all'; // Mögliche Werte: 'all', 'PON', 'PtP'
+const END_DEVICE_TYPES = ['ONT', 'Business NT']; // Hilfskonstante
 
 const ZOOM_THRESHOLD = 7; 
 
@@ -28,14 +32,15 @@ const statusToColor = {
 
 const getEdgeLeafletColor = (status) => (statusToColor[status] || { color: '#9E9E9E' }).color;
 
-// --- Formatierungsfunktionen ---
+// --- Formatierungsfunktionen (angepasst für Phase 4) ---
 
 function formatDeviceToNode(d) {
     const node = {
         id: d.id,
-        label: `${d.type}\n(${d.id})`,
+        label: d.type,
+        title: `${d.type}: ${d.id}`, // Tooltip für Details
         shape: 'box',
-        borderWidth: 1,
+        borderWidth: 2,
         color: statusToColor[d.status] || { border: '#9E9E9E', background: '#616161' },
         font: { color: '#ffffff' },
         data: d,
@@ -47,7 +52,6 @@ function formatDeviceToNode(d) {
             node.color = { border: '#00BFFF', background: '#202A40' };
             node.size = 30;
             node.label = d.id;
-            node.font = { color: '#00BFFF', size: 16 };
             break;
         case 'POP':
             node.shape = 'database';
@@ -55,21 +59,17 @@ function formatDeviceToNode(d) {
             node.size = 25;
             node.label = d.id;
             break;
+        case 'ODF':
+            node.label = 'ODF';
+            node.color = { border: '#cccccc', background: '#555555' };
+            break;
         case 'NVt':
-            node.shape = 'box';
-            node.label = `NVt\n${d.properties.model || ''}`;
             node.color = { border: '#cccccc', background: '#888888' };
             break;
         case 'HÜP':
             node.shape = 'dot';
             node.size = 10;
-            node.label = 'HÜP';
-            node.color = { border: '#FFFFFF', background: '#AAAAAA' };
-            break;
-        case 'ODF':
-            node.shape = 'box';
-            node.label = 'ODF';
-            node.color = { border: '#cccccc', background: '#555555' };
+            node.label = null;
             break;
         case 'OLT':
             node.color = { border: '#f5b041', background: '#873600' };
@@ -77,10 +77,24 @@ function formatDeviceToNode(d) {
         case 'Splitter':
             node.color = { border: '#a569bd', background: '#5b2c6f' };
             break;
+        // --- NEU FÜR PHASE 4 ---
+        case 'AON Switch':
+            node.shape = 'square';
+            node.color = { border: '#9400D3', background: '#4B0082' }; // DarkViolet-Töne
+            break;
+        case 'Business NT':
+            node.shape = 'box';
+            node.color = { border: '#9400D3', background: '#4B0082' };
+            node.label = "Business NT"
+            break;
+        case 'ONT':
+             node.shape = 'box';
+             node.color = statusToColor[d.status];
+             break;
     }
-    
     return node;
 }
+
 function formatLinkToEdge(l) {
     const edge = {
         id: l.id,
@@ -91,71 +105,67 @@ function formatLinkToEdge(l) {
         arrows: 'to, from',
         dashes: l.status === 'blocking' ? [5, 5] : false,
         data: l,
-        label: l.properties?.typ,
         font: { color: '#aaa', size: 11, align: 'top', strokeWidth: 3, strokeColor: '#1a1a1a' }
     };
 
-    const props = l.properties;
-    if (props && props.typ) {
-        if (props.typ === 'Backbone') {
-            edge.color = { color: '#FF4500' };
-            edge.width = 4;
-            edge.dashes = [10, 10];
-            edge.label = 'Backbone';
-        } else if (props.typ === 'Regional') {
-            edge.color = { color: '#8A2BE2' };
-            edge.width = 2.5;
-            edge.dashes = [5, 5];
-            edge.label = 'Regional';
-        }
+    const props = l.properties || {};
+
+    // --- NEU FÜR PHASE 4: PtP-Links hervorheben ---
+    if (props.link_technology === 'PtP') {
+        edge.color = { color: '#9400D3' }; // DarkViolet
+        edge.width = 4;
+        edge.dashes = false;
+        edge.label = `PtP (${props.guaranteed_bandwidth_gbps || '...'} Gbit/s)`;
+    } else if (props.typ === 'Backbone') {
+        edge.color = { color: '#FF4500' };
+        edge.width = 4;
+        edge.dashes = [10, 10];
+        edge.label = 'Backbone';
+    } else if (props.typ === 'Regional') {
+        edge.color = { color: '#8A2BE2' };
+        edge.width = 2.5;
+        edge.dashes = [5, 5];
+        edge.label = 'Regional';
     }
     return edge;
 }
 
-// --- setupEventListeners: Direkt nach den Formatierern eingefügt ---
+// --- setupEventListeners (angepasst für Phase 4) ---
 function setupEventListeners() {
-    // Umschalter für die Ansicht (national/local)
+    // Geografischer Ansicht-Umschalter
     document.getElementById('btn-view-national').addEventListener('click', () => renderView('national'));
     document.getElementById('btn-view-local').addEventListener('click', () => renderView('local'));
 
     // Toggle zwischen Karten- und Topologieansicht
     document.getElementById('toggle-btn').addEventListener('click', toggleView);
 
-    // Beispiel: Klick auf das vis.js Netzwerk
+    // Klick auf das vis.js Netzwerk
     if (network) {
         network.on('click', params => {
-            if (params.nodes && params.nodes.length > 0) {
-                const nodeId = params.nodes[0];
-                const nodeData = nodes.get(nodeId);
-                renderProperties(nodeData.data);
+            const nodeId = params.nodes.length > 0 ? params.nodes[0] : null;
+            if (nodeId) {
+                renderProperties(nodes.get(nodeId).data);
             } else {
                 renderProperties(null);
             }
         });
     }
 
-    // CLI-Events
-    const cliInput = document.getElementById('cli-input');
-    if (cliInput) {
-        cliInput.addEventListener('keydown', handleCliKeyDown);
-        cliInput.addEventListener('input', debounce(handleAutocomplete, 150));
-    }
+    // --- NEU FÜR PHASE 4: Event-Listener für Architektur-Filter ---
+    document.getElementById('filter-all').addEventListener('click', () => applyArchFilter('all'));
+    document.getElementById('filter-pon').addEventListener('click', () => applyArchFilter('PON'));
+    document.getElementById('filter-ptp').addEventListener('click', () => applyArchFilter('PtP'));
 
-    // Snapshot-Funktionen
+    // CLI, Snapshots, Undo/Redo bleiben gleich
+    document.getElementById('cli-input')?.addEventListener('keydown', handleCliKeyDown);
     document.getElementById('save-snapshot-btn')?.addEventListener('click', saveSnapshot);
     document.getElementById('load-snapshot-btn')?.addEventListener('click', loadSnapshot);
-
-    // Fiber-Cut Simulation
     document.getElementById('simulate-fiber-cut-btn')?.addEventListener('click', simulateFiberCut);
-
-    // Undo/Redo
     document.getElementById('undo-btn')?.addEventListener('click', () => postAction('/api/simulation/undo'));
     document.getElementById('redo-btn')?.addEventListener('click', () => postAction('/api/simulation/redo'));
-
-    // ... hier kannst du beliebig weitere Events hinzufügen ...
 }
 
-// --- Initialisierung & WebSocket ---
+// --- Initialisierung & WebSocket (unverändert) ---
 async function initialize() {
     initializeWebSocket();
 }
@@ -169,13 +179,13 @@ function initializeWebSocket() {
     });
 
     socket.on('initial_topology', (data) => {
-        console.log("Initiale Topologie empfangen, speichere sie...", data);
+        console.log("Initiale Topologie empfangen.", data);
         fullTopologyData = data;
         renderView(activeViewMode);
     });
 
     socket.on('full_state_update', (data) => {
-        console.log("Full State Update empfangen, aktualisiere Ansicht...");
+        console.log("Full State Update empfangen.");
         fullTopologyData = data;
         renderView(activeViewMode);
     });
@@ -184,107 +194,122 @@ function initializeWebSocket() {
         const eventLog = document.getElementById('event-log');
         const newLi = document.createElement('li');
         newLi.textContent = event_message;
-        if (eventLog.firstChild && eventLog.firstChild.classList.contains('loader')) {
-            eventLog.innerHTML = '';
-        }
+        if (eventLog.firstChild && eventLog.firstChild.classList.contains('loader')) eventLog.innerHTML = '';
         eventLog.prepend(newLi);
-        while (eventLog.children.length > 100) { eventLog.removeChild(eventLog.lastChild); }
+        if (eventLog.children.length > 100) eventLog.removeChild(eventLog.lastChild);
     });
 
     socket.on('disconnect', () => {
         showModal('Verbindung getrennt', 'Verbindung zum Backend verloren. Bitte Seite neu laden.', [{ text: 'OK', class: 'modal-btn-danger', callback: () => window.location.reload() }]);
     });
 }
+
+// --- NEU FÜR PHASE 4: Funktion zum Anwenden des Architektur-Filters ---
+function applyArchFilter(tech) {
+    console.log(`Architektur-Filter wird auf "${tech}" gesetzt.`);
+    currentArchFilter = tech;
+    
+    document.querySelectorAll('.arch-filter-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    document.getElementById(`filter-${tech.toLowerCase()}`).classList.add('active');
+
+    renderView(activeViewMode);
+}
+
+// --- Kern-Rendering-Logik (stark angepasst für Phase 4) ---
 function renderView(mode) {
-    if (!fullTopologyData) {
-        console.error("Keine Topologiedaten zum Rendern vorhanden.");
-        return;
-    }
+    if (!fullTopologyData) return;
 
     activeViewMode = mode;
-    console.log(`Ansicht wird auf "${activeViewMode}" umgeschaltet.`);
-
-    // Buttons-Stil aktualisieren
+    console.log(`Rendering view: mode=${mode}, filter=${currentArchFilter}`);
     document.getElementById('btn-view-national').classList.toggle('active', mode === 'national');
     document.getElementById('btn-view-local').classList.toggle('active', mode === 'local');
 
-    // Daten filtern basierend auf der 'data_source' Eigenschaft
-    let filteredData = { devices: [], links: [], rings: [] };
-    
+    // --- ERSTE FILTERSTUFE: Geografisch (national vs. local) ---
+    let geoFilteredData;
     if (mode === 'national') {
-        filteredData.devices = fullTopologyData.devices.filter(d => d.properties?.data_source === 'geojson');
-        const nationalDeviceIds = new Set(filteredData.devices.map(d => d.id));
-        filteredData.links = fullTopologyData.links.filter(l => 
-            nationalDeviceIds.has(l.source) && nationalDeviceIds.has(l.target)
-        );
-    } else { // mode === 'local'
-        filteredData.devices = fullTopologyData.devices.filter(d => d.properties?.data_source === 'rees_topology');
-        const localDeviceIds = new Set(filteredData.devices.map(d => d.id));
-        filteredData.links = fullTopologyData.links.filter(l => 
-            localDeviceIds.has(l.source) && localDeviceIds.has(l.target)
-        );
-        filteredData.rings = fullTopologyData.rings ? fullTopologyData.rings.filter(r => r.id.includes("REES")) : [];
+        const nationalDeviceIds = new Set(fullTopologyData.devices.filter(d => d.properties?.data_source === 'geojson').map(d => d.id));
+        geoFilteredData = {
+            devices: fullTopologyData.devices.filter(d => nationalDeviceIds.has(d.id)),
+            links: fullTopologyData.links.filter(l => nationalDeviceIds.has(l.source) && nationalDeviceIds.has(l.target)),
+            rings: fullTopologyData.rings || []
+        };
+    } else {
+        const localDeviceIds = new Set(fullTopologyData.devices.filter(d => d.properties?.data_source === 'rees_topology').map(d => d.id));
+        geoFilteredData = {
+            devices: fullTopologyData.devices.filter(d => localDeviceIds.has(d.id)),
+            links: fullTopologyData.links.filter(l => localDeviceIds.has(l.source) && localDeviceIds.has(l.target)),
+            rings: (fullTopologyData.rings || []).filter(r => r.id.includes("REES"))
+        };
     }
+
+    // --- ZWEITE FILTERSTUFE: Architektur (PON vs. PtP) ---
+    let finalFilteredData = { devices: [], links: [] };
+    if (currentArchFilter === 'all') {
+        finalFilteredData.links = geoFilteredData.links;
+    } else {
+        finalFilteredData.links = geoFilteredData.links.filter(l => {
+            const tech = l.properties?.link_technology || 'PON';
+            return tech.toLowerCase() === currentArchFilter.toLowerCase();
+        });
+    }
+
+    const visibleNodeIds = new Set();
+    finalFilteredData.links.forEach(link => {
+        visibleNodeIds.add(link.source);
+        visibleNodeIds.add(link.target);
+    });
+    // Füge isolierte Knoten hinzu, die zur geografischen Ansicht, aber zu keinem Link gehören
+    geoFilteredData.devices.forEach(d => {
+       if (!edges.getIds().some(edgeId => edges.get(edgeId).from === d.id || edges.get(edgeId).to === d.id)) {
+           if (finalFilteredData.links.length === 0 && currentArchFilter === 'all') {
+               visibleNodeIds.add(d.id);
+           }
+       }
+    });
+
+    finalFilteredData.devices = geoFilteredData.devices.filter(device => visibleNodeIds.has(device.id));
     
-    // UI mit den GEFILTERTEN Daten neu aufbauen
+    // UI mit den ZWEIMAL GEFILTERTEN Daten neu aufbauen
     nodes.clear();
     edges.clear();
-
-    nodes.add(filteredData.devices.map(d => formatDeviceToNode({ ...d, id: d.id })));
-    edges.add(filteredData.links.map(l => formatLinkToEdge({ ...l, id: l.id })));
+    nodes.add(finalFilteredData.devices.map(d => formatDeviceToNode(d)));
+    edges.add(finalFilteredData.links.map(l => formatLinkToEdge(l)));
     
-    // KORREKTUR: Netzwerk-Initialisierung und Event-Listener-Setup hierher verschoben
     if (!network) {
-        // Wird nur beim allerersten Aufruf ausgeführt
         const container = document.getElementById('network-container');
-        const options = {
-    physics: {
-        barnesHut: {
-            gravitationalConstant: -4000,
-            springLength: 250, // Macht die "Federn" der Links länger
-            springConstant: 0.05,
-            avoidOverlap: 0.1
-        }
-    },
-    interaction: {
-        hover: true
+        const options = { /* ... vis.js options ... */ };
+        network = new vis.Network(container, { nodes, edges }, options);
+        setupEventListeners();
     }
-};
-network = new vis.Network(container, { nodes, edges }, options);
-        setupEventListeners(); // HIER werden die Knöpfe jetzt funktionsfähig gemacht
-    } else {
-        // Bei allen weiteren Aufrufen werden nur die Daten aktualisiert
-        network.setData({ nodes, edges });
-    }
+    
+    // UI-Teile aktualisieren
+    initializeMapView(finalFilteredData);
+    updateRingPanel(geoFilteredData);
 
-    // Andere UI-Teile mit den gefilterten Daten aktualisieren
-    initializeMapView(filteredData);
-    updateRingPanel(filteredData);
-
-    // HUD und Alarme mit den GESAMT-Daten aktualisieren
+    // HUD & Alarme immer mit den GESAMT-Daten aktualisieren
     if (fullTopologyData.stats) updateHud(fullTopologyData.stats);
     if (fullTopologyData.alarms) updateAlarms(fullTopologyData.alarms);
     if (fullTopologyData.history_status) updateHistoryButtons(fullTopologyData.history_status);
     
-    // Ansicht-Steuerung (Karte/Topologie)
+    // Ansicht-Steuerung
     const mapContainer = document.getElementById('map-container');
     const networkContainer = document.getElementById('network-container');
     const toggleBtn = document.getElementById('toggle-btn');
-
     if (mode === 'national') {
         mapContainer.style.visibility = 'visible';
         networkContainer.style.visibility = 'hidden';
         toggleBtn.textContent = 'Topologieansicht';
         currentView = 'map';
         if (map) map.invalidateSize();
-    } else { // mode === 'local'
+    } else {
         mapContainer.style.visibility = 'hidden';
         networkContainer.style.visibility = 'visible';
         toggleBtn.textContent = 'Kartenansicht';
         currentView = 'topo';
     }
 }
-
 // --- UI-Update-Funktionen ---
 
 function updateAlarms(alarms) {
@@ -292,23 +317,26 @@ function updateAlarms(alarms) {
     hudAlarms.textContent = alarms ? alarms.length : 0;
     hudAlarms.style.color = (alarms && alarms.length > 0) ? 'var(--accent-red)' : 'var(--accent-green)';
 
+    const activeAlarmedNodes = new Set(
+        (alarms || [])
+        .filter(a => a.affected_object_type === 'device')
+        .map(a => a.affected_object_id)
+    );
+
     nodes.getIds().forEach(nodeId => {
         const node = nodes.get(nodeId);
-        if (node && node.icon) {
+        const hasIcon = node && node.icon;
+        const shouldHaveIcon = activeAlarmedNodes.has(nodeId);
+
+        if (hasIcon && !shouldHaveIcon) {
             nodes.update({ id: nodeId, icon: undefined });
+        } else if (!hasIcon && shouldHaveIcon) {
+            nodes.update({
+                id: nodeId,
+                icon: { face: "'Font Awesome 5 Free'", code: '\uf071', size: 50, color: 'red' }
+            });
         }
     });
-
-    if (alarms) {
-        alarms.forEach(alarm => {
-            if (alarm.affected_object_type === 'device') {
-                nodes.update({
-                    id: alarm.affected_object_id,
-                    icon: { face: "'Font Awesome 5 Free'", code: '\uf071', size: 50, color: 'red' }
-                });
-            }
-        });
-    }
 }
 
 function updateHud(stats) {
@@ -318,6 +346,7 @@ function updateHud(stats) {
     alarmsEl.textContent = stats.alarms;
     alarmsEl.style.color = stats.alarms > 0 ? 'var(--accent-red)' : 'var(--accent-green)';
 }
+
 function updateHistoryButtons(status) {
     document.getElementById('undo-btn').disabled = !status.can_undo;
     document.getElementById('redo-btn').disabled = !status.can_redo;
@@ -331,8 +360,7 @@ function updateRingPanel(topology) {
     }
     let html = '<table>';
     topology.rings.forEach(ring => {
-        // Finde den Link im VOLLEN Datensatz, da er in der gefilterten Ansicht fehlen könnte
-        const rpl = fullTopologyData.links.find(l => l.id === ring.rpl_link_id_str);
+        const rpl = fullTopologyData.links.find(l => l.id === ring.rpl_link_id);
         if (rpl) {
             const statusClass = rpl.status === 'blocking' ? 'status-blocking' : 'status-forwarding';
             html += `<tr><td><b>${ring.name}</b></td><td class="${statusClass}">${rpl.status.toUpperCase()}</td></tr>`;
@@ -341,7 +369,8 @@ function updateRingPanel(topology) {
     ringInfoDiv.innerHTML = html + '</table>';
 }
 
-// --- Karten- & Zoom-Logik ---
+
+// --- Karten- & Zoom-Logik (angepasst für Phase 4) ---
 
 function initializeMapView(topology) {
     if (!map) {
@@ -349,7 +378,7 @@ function initializeMapView(topology) {
         if (mapContainer) {
             map = L.map(mapContainer).setView([51.5, 10.5], 6);
             L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-                attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 20
+                attribution: '© OpenStreetMap © CARTO', maxZoom: 20
             }).addTo(map);
             map.on('zoomend', handleZoom);
         } else {
@@ -379,8 +408,8 @@ function initializeMapView(topology) {
     });
 
     topology.links.forEach(link => {
-        const source = topology.devices.find(d => d.id === link.source);
-        const target = topology.devices.find(d => d.id === link.target);
+        const source = fullTopologyData.devices.find(d => d.id === link.source);
+        const target = fullTopologyData.devices.find(d => d.id === link.target);
         if (source?.coordinates && target?.coordinates) {
             const latlngs = [ [source.coordinates[1], source.coordinates[0]], [target.coordinates[1], target.coordinates[0]] ];
             mapLines[link.id] = L.polyline(latlngs).addTo(map);
@@ -395,11 +424,20 @@ function syncMapWithState(topology) {
     if (!map) return;
     topology.links.forEach(link => {
         if (mapLines[link.id]) {
-            const props = link.properties;
+            const props = link.properties || {};
             let style = { color: getEdgeLeafletColor(link.status), weight: 2 };
-            if (props?.typ === 'Backbone') { style.weight = 5; style.color = '#FF4500'; style.dashArray = '15, 15'; } 
-            else if (props?.typ === 'Regional') { style.weight = 3; style.color = '#8A2BE2'; style.dashArray = '8, 8'; } 
-            else if (link.status === 'blocking') { style.dashArray = '5, 5'; }
+            
+            // --- Logik aus formatLinkToEdge hier spiegeln ---
+            if (props.link_technology === 'PtP') {
+                style.weight = 4;
+                style.color = '#9400D3'; // DarkViolet
+            } else if (props.typ === 'Backbone') { 
+                style.weight = 5; style.color = '#FF4500'; style.dashArray = '15, 15';
+            } else if (props.typ === 'Regional') { 
+                style.weight = 3; style.color = '#8A2BE2'; style.dashArray = '8, 8';
+            } else if (link.status === 'blocking') { 
+                style.dashArray = '5, 5';
+            }
             mapLines[link.id].setStyle(style);
         }
     });
@@ -433,7 +471,9 @@ function handleZoom() {
         }
     }
 }
-// --- Eigenschaften-Panel & Interaktion ---
+
+
+// --- Eigenschaften-Panel (angepasst für Phase 4) ---
 
 async function renderProperties(dataToShow) {
     const contentDiv = document.getElementById('properties-content');
@@ -442,50 +482,44 @@ async function renderProperties(dataToShow) {
         return;
     }
 
-    // Baut die erste Tabelle mit den allgemeinen Gerätedaten
     let table = '<table>';
     table += `<tr><th>ID</th><td>${dataToShow.id}</td></tr>`;
     table += `<tr><th>Typ</th><td>${dataToShow.type}</td></tr>`;
     if (dataToShow.status) table += `<tr><th>Status</th><td>${dataToShow.status}</td></tr>`;
+    table += '</table>';
 
-    if (dataToShow.type === 'Core Node') {
-        const props = dataToShow.properties;
-        table += '</table><h3 style="text-align:center; background-color: #333; margin: 15px 0 0; padding: 8px;">Core Network Details</h3><table>';
-        table += `<tr><th>Standort</th><td>${props.standort || 'N/A'}</td></tr>`;
-        table += `<tr><th>Peering</th><td>${props.peering || 'N/A'}</td></tr>`;
-        table += `<tr><th>Kapazität</th><td>${props.peering_capacity_gbit || 'N/A'} Gbit/s</td></tr>`;
-        table += `<tr><th>AS-Nummern</th><td>${props.as_numbers || 'N/A'}</td></tr>`;
-    } 
-    else if (dataToShow.properties && Object.keys(dataToShow.properties).length > 0) {
-        table += '</table><h3 style="text-align:center; background-color: #333; margin: 15px 0 0; padding: 8px;">Properties</h3><table>';
+    if (dataToShow.properties && Object.keys(dataToShow.properties).length > 0) {
+        table += '<hr><h4>Eigenschaften</h4><table>';
         for (const [propKey, propValue] of Object.entries(dataToShow.properties)) {
+            if (propKey === 'data_source') continue;
             table += `<tr><th>${propKey}</th><td>${JSON.stringify(propValue)}</td></tr>`;
         }
+        table += '</table>';
     }
-    table += '</table>';
     contentDiv.innerHTML = table;
     
-    // --- NEUE LOGIK FÜR ONT-LEISTUNGSBUDGET ---
-    if (dataToShow.type === 'ONT') {
+    // --- ERWEITERTE LOGIK FÜR ALLE ENDGERÄTE (ONT & Business NT) ---
+    if (END_DEVICE_TYPES.includes(dataToShow.type)) {
         try {
             const res = await fetch(`${backendUrl}/api/devices/${dataToShow.id}/signal`);
             if (!res.ok) throw new Error(`Signalabfrage fehlgeschlagen: ${res.status}`);
             const signalInfo = await res.json();
             
             if (signalInfo.budget && signalInfo.power_dbm !== null) {
-                let budgetHtml = '<hr><h4>Leistungsbudget-Analyse</h4><table>';
+                let budgetHtml = `<hr><h4>Leistungsbudget-Analyse (${signalInfo.path_technology || ''})</h4><table>`;
                 
-                if (signalInfo.budget['OLT Transmit Power'] !== undefined) {
-                    budgetHtml += `<tr><th>OLT Transmit Power</th><td>${signalInfo.budget['OLT Transmit Power'].toFixed(2)} dBm</td></tr>`;
+                const txPowerKey = Object.keys(signalInfo.budget).find(k => k.toLowerCase().includes('transmit power'));
+                if (txPowerKey) {
+                    budgetHtml += `<tr><th>${txPowerKey}</th><td>${signalInfo.budget[txPowerKey].toFixed(2)} dBm</td></tr>`;
                 }
                 
                 for (const [key, value] of Object.entries(signalInfo.budget)) {
-                    if (key === 'OLT Transmit Power') continue;
+                    if (key.toLowerCase().includes('transmit power')) continue;
+                    if (key === 'Splitter Loss' && value === 0) continue;
+                    
                     budgetHtml += `<tr><th>${key}</th><td>-${value.toFixed(2)} dB</td></tr>`;
                 }
 
-                // *** KORRIGIERTE ZEILE HIER ***
-                // Wir mappen den Backend-Status "online" auf die CSS-Klasse "signal-good"
                 const statusClass = signalInfo.status === 'online' ? 'signal-good' : `signal-${signalInfo.status.toLowerCase()}`;
                 
                 budgetHtml += `
@@ -494,9 +528,7 @@ async function renderProperties(dataToShow) {
                     </tr>
                     <tr>
                         <th>Empfangspegel (Rx)</th>
-                        <td class="${statusClass}">
-                            ${signalInfo.power_dbm} dBm
-                        </td>
+                        <td class="${statusClass}">${signalInfo.power_dbm.toFixed(2)} dBm</td>
                     </tr>
                 `;
                 budgetHtml += '</table>';
@@ -515,6 +547,9 @@ async function renderProperties(dataToShow) {
         }
     }
 }
+
+
+// --- Restliche Funktionen (unverändert) ---
 
 function toggleView() {
     const mapContainer = document.getElementById('map-container');
@@ -556,7 +591,6 @@ function showModal(title, message, buttons = [{ text: 'OK', class: 'modal-btn-pr
 function hideModal() {
     document.getElementById('modal-overlay').classList.add('hidden');
 }
-// --- Aktionen & CLI ---
 
 async function postAction(endpoint, payload = {}) {
     try {

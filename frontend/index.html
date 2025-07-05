@@ -15,11 +15,21 @@
 <body>
     <header>
         <h1>UNOC - Unified NOC UI</h1>
+        
+        <!-- Geografischer Filter -->
         <div id="view-mode-toggle">
             <button id="btn-view-national" class="view-mode-btn active">Nationale Übersicht</button>
             <button id="btn-view-local" class="view-mode-btn">Lokale Simulation (Rees)</button>
         </div>
-        </header>
+        
+        <!-- NEU FÜR PHASE 4: Architektur-Filter -->
+        <div id="arch-filter-toggle">
+            <span>Architektur:</span>
+            <button id="filter-all" class="arch-filter-btn active">Alle</button>
+            <button id="filter-pon" class="arch-filter-btn">PON</button>
+            <button id="filter-ptp" class="arch-filter-btn">PtP</button>
+        </div>
+    </header>
 
     <div id="hud">
         <div class="hud-item"><h3>Geräte Online</h3><p id="hud-devices">...</p></div>
