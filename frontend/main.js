@@ -442,6 +442,7 @@ async function renderProperties(dataToShow) {
         return;
     }
 
+    // Baut die erste Tabelle mit den allgemeinen Gerätedaten
     let table = '<table>';
     table += `<tr><th>ID</th><td>${dataToShow.id}</td></tr>`;
     table += `<tr><th>Typ</th><td>${dataToShow.type}</td></tr>`;
@@ -462,29 +463,51 @@ async function renderProperties(dataToShow) {
         }
     }
     table += '</table>';
-
     contentDiv.innerHTML = table;
     
+    // --- NEUE LOGIK FÜR ONT-LEISTUNGSBUDGET ---
     if (dataToShow.type === 'ONT') {
         try {
-            const response = await fetch(`${backendUrl}/api/devices/${dataToShow.id}/signal`);
-            if (!response.ok) return;
-            const signalInfo = await response.json();
-            if (!signalInfo || signalInfo.status === 'NOT_APPLICABLE') return;
+            const res = await fetch(`${backendUrl}/api/devices/${dataToShow.id}/signal`);
+            if (!res.ok) throw new Error(`Signalabfrage fehlgeschlagen: ${res.status}`);
+            const signalInfo = await res.json();
+            
+            if (signalInfo.budget && signalInfo.power_dbm !== null) {
+                let budgetHtml = '<hr><h4>Leistungsbudget-Analyse</h4><table>';
+                
+                if (signalInfo.budget['OLT Transmit Power'] !== undefined) {
+                    budgetHtml += `<tr><th>OLT Transmit Power</th><td>${signalInfo.budget['OLT Transmit Power'].toFixed(2)} dBm</td></tr>`;
+                }
+                
+                for (const [key, value] of Object.entries(signalInfo.budget)) {
+                    if (key === 'OLT Transmit Power') continue;
+                    budgetHtml += `<tr><th>${key}</th><td>-${value.toFixed(2)} dB</td></tr>`;
+                }
 
-            let signalCellHTML = '';
-            if (signalInfo.status === 'NO_PATH') {
-                signalCellHTML = `<td class="signal-los" colspan="2">${signalInfo.status} (Pfad unterbrochen)</td>`;
-            } else if (signalInfo.power_dbm !== null) {
-                const signalStatusClass = `signal-${signalInfo.status.toLowerCase()}`;
-                signalCellHTML = `<td class="${signalStatusClass}" colspan="2">${signalInfo.power_dbm} dBm (${signalInfo.status})</td>`;
-            }
-
-            if (signalCellHTML) {
-                const tables = contentDiv.querySelectorAll('table');
-                const lastTable = tables[tables.length - 1];
-                if (lastTable) {
-                    lastTable.innerHTML += `<tr><th style="text-align:center;" colspan="2">Signal Level</th></tr><tr>${signalCellHTML}</tr>`;
+                // *** KORRIGIERTE ZEILE HIER ***
+                // Wir mappen den Backend-Status "online" auf die CSS-Klasse "signal-good"
+                const statusClass = signalInfo.status === 'online' ? 'signal-good' : `signal-${signalInfo.status.toLowerCase()}`;
+                
+                budgetHtml += `
+                    <tr style="border-top: 2px solid #555;">
+                        <th>Gesamtverlust</th><td>-${signalInfo.total_loss.toFixed(2)} dB</td>
+                    </tr>
+                    <tr>
+                        <th>Empfangspegel (Rx)</th>
+                        <td class="${statusClass}">
+                            ${signalInfo.power_dbm} dBm
+                        </td>
+                    </tr>
+                `;
+                budgetHtml += '</table>';
+                contentDiv.innerHTML += budgetHtml;
+            } else {
+                const firstTable = contentDiv.querySelector('table');
+                if (firstTable) {
+                    const row = document.createElement('tr');
+                    const statusText = signalInfo.status || (signalInfo.error || "N/A");
+                    row.innerHTML = `<th>Signal Level</th><td class="signal-los">${statusText}</td>`;
+                    firstTable.appendChild(row);
                 }
             }
         } catch (e) {
