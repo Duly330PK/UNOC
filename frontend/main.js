@@ -1,5 +1,5 @@
 /*
- * UNOC - main.js (v9 - Hybrid Architecture für Phase 4)
+ * UNOC - main.js (v10 - L2/L3 Simulation für Phase 5)
  */
 
 // --- Globale Variablen & Zustand ---
@@ -14,7 +14,6 @@ let selectedType = null;
 let fullTopologyData = null; // Speichert die komplette, ungefilterte Topologie
 let activeViewMode = 'national'; // Startet mit der nationalen Ansicht
 
-// --- NEU FÜR PHASE 4: Zustand für den Architektur-Filter ---
 let currentArchFilter = 'all'; // Mögliche Werte: 'all', 'PON', 'PtP'
 const END_DEVICE_TYPES = ['ONT', 'Business NT']; // Hilfskonstante
 
@@ -32,13 +31,13 @@ const statusToColor = {
 
 const getEdgeLeafletColor = (status) => (statusToColor[status] || { color: '#9E9E9E' }).color;
 
-// --- Formatierungsfunktionen (angepasst für Phase 4) ---
+// --- Formatierungsfunktionen ---
 
 function formatDeviceToNode(d) {
     const node = {
         id: d.id,
         label: d.type,
-        title: `${d.type}: ${d.id}`, // Tooltip für Details
+        title: `${d.type}: ${d.id}`,
         shape: 'box',
         borderWidth: 2,
         color: statusToColor[d.status] || { border: '#9E9E9E', background: '#616161' },
@@ -77,10 +76,9 @@ function formatDeviceToNode(d) {
         case 'Splitter':
             node.color = { border: '#a569bd', background: '#5b2c6f' };
             break;
-        // --- NEU FÜR PHASE 4 ---
         case 'AON Switch':
             node.shape = 'square';
-            node.color = { border: '#9400D3', background: '#4B0082' }; // DarkViolet-Töne
+            node.color = { border: '#9400D3', background: '#4B0082' };
             break;
         case 'Business NT':
             node.shape = 'box';
@@ -110,9 +108,8 @@ function formatLinkToEdge(l) {
 
     const props = l.properties || {};
 
-    // --- NEU FÜR PHASE 4: PtP-Links hervorheben ---
     if (props.link_technology === 'PtP') {
-        edge.color = { color: '#9400D3' }; // DarkViolet
+        edge.color = { color: '#9400D3' };
         edge.width = 4;
         edge.dashes = false;
         edge.label = `PtP (${props.guaranteed_bandwidth_gbps || '...'} Gbit/s)`;
@@ -130,7 +127,7 @@ function formatLinkToEdge(l) {
     return edge;
 }
 
-// --- setupEventListeners (angepasst für Phase 4) ---
+// --- setupEventListeners (angepasst für Phase 5) ---
 function setupEventListeners() {
     // Geografischer Ansicht-Umschalter
     document.getElementById('btn-view-national').addEventListener('click', () => renderView('national'));
@@ -151,10 +148,13 @@ function setupEventListeners() {
         });
     }
 
-    // --- NEU FÜR PHASE 4: Event-Listener für Architektur-Filter ---
+    // Architektur-Filter
     document.getElementById('filter-all').addEventListener('click', () => applyArchFilter('all'));
     document.getElementById('filter-pon').addEventListener('click', () => applyArchFilter('PON'));
     document.getElementById('filter-ptp').addEventListener('click', () => applyArchFilter('PtP'));
+
+    // --- NEU FÜR PHASE 5: Virtueller Router ---
+    document.getElementById('vr-apply-btn').addEventListener('click', applyVirtualRouterConfig);
 
     // CLI, Snapshots, Undo/Redo bleiben gleich
     document.getElementById('cli-input')?.addEventListener('keydown', handleCliKeyDown);
@@ -165,7 +165,7 @@ function setupEventListeners() {
     document.getElementById('redo-btn')?.addEventListener('click', () => postAction('/api/simulation/redo'));
 }
 
-// --- Initialisierung & WebSocket (unverändert) ---
+// --- Initialisierung & WebSocket (angepasst für Phase 5) ---
 async function initialize() {
     initializeWebSocket();
 }
@@ -199,12 +199,34 @@ function initializeWebSocket() {
         if (eventLog.children.length > 100) eventLog.removeChild(eventLog.lastChild);
     });
 
+    // --- NEU FÜR PHASE 5: WebSocket-Handler für den Router-Status ---
+    socket.on('virtual_router_status', (data) => {
+        const output = document.getElementById('vr-status-output');
+        if (!output) return;
+
+        if (data.status === 'CONNECTED') {
+            output.innerHTML = `
+                <p style="color: var(--accent-green);">Status: Verbunden</p>
+                <p>IPv4: ${data.ipv4.address} (${data.ipv4.type})</p>
+                <p>IPv6: ${data.ipv6.prefix} (Angefordert: /${data.ipv6.delegated_size})</p>
+            `;
+            if (data.ipv6.delegated_size != 56) {
+                output.innerHTML += `<p style="color: var(--accent-red);">WARNUNG: Subnetting nicht möglich!</p>`;
+            }
+        } else {
+            output.innerHTML = `
+                <p style="color: var(--accent-red);">Status: Fehlgeschlagen</p>
+                <p>Grund: ${data.reason}</p>
+            `;
+        }
+    });
+
     socket.on('disconnect', () => {
         showModal('Verbindung getrennt', 'Verbindung zum Backend verloren. Bitte Seite neu laden.', [{ text: 'OK', class: 'modal-btn-danger', callback: () => window.location.reload() }]);
     });
 }
 
-// --- NEU FÜR PHASE 4: Funktion zum Anwenden des Architektur-Filters ---
+// --- Filter- & Rendering-Logik ---
 function applyArchFilter(tech) {
     console.log(`Architektur-Filter wird auf "${tech}" gesetzt.`);
     currentArchFilter = tech;
@@ -217,7 +239,6 @@ function applyArchFilter(tech) {
     renderView(activeViewMode);
 }
 
-// --- Kern-Rendering-Logik (stark angepasst für Phase 4) ---
 function renderView(mode) {
     if (!fullTopologyData) return;
 
@@ -226,7 +247,6 @@ function renderView(mode) {
     document.getElementById('btn-view-national').classList.toggle('active', mode === 'national');
     document.getElementById('btn-view-local').classList.toggle('active', mode === 'local');
 
-    // --- ERSTE FILTERSTUFE: Geografisch (national vs. local) ---
     let geoFilteredData;
     if (mode === 'national') {
         const nationalDeviceIds = new Set(fullTopologyData.devices.filter(d => d.properties?.data_source === 'geojson').map(d => d.id));
@@ -244,7 +264,6 @@ function renderView(mode) {
         };
     }
 
-    // --- ZWEITE FILTERSTUFE: Architektur (PON vs. PtP) ---
     let finalFilteredData = { devices: [], links: [] };
     if (currentArchFilter === 'all') {
         finalFilteredData.links = geoFilteredData.links;
@@ -260,7 +279,6 @@ function renderView(mode) {
         visibleNodeIds.add(link.source);
         visibleNodeIds.add(link.target);
     });
-    // Füge isolierte Knoten hinzu, die zur geografischen Ansicht, aber zu keinem Link gehören
     geoFilteredData.devices.forEach(d => {
        if (!edges.getIds().some(edgeId => edges.get(edgeId).from === d.id || edges.get(edgeId).to === d.id)) {
            if (finalFilteredData.links.length === 0 && currentArchFilter === 'all') {
@@ -268,10 +286,8 @@ function renderView(mode) {
            }
        }
     });
-
     finalFilteredData.devices = geoFilteredData.devices.filter(device => visibleNodeIds.has(device.id));
     
-    // UI mit den ZWEIMAL GEFILTERTEN Daten neu aufbauen
     nodes.clear();
     edges.clear();
     nodes.add(finalFilteredData.devices.map(d => formatDeviceToNode(d)));
@@ -279,21 +295,28 @@ function renderView(mode) {
     
     if (!network) {
         const container = document.getElementById('network-container');
-        const options = { /* ... vis.js options ... */ };
+        const options = { 
+            physics: {
+                barnesHut: {
+                    gravitationalConstant: -4000,
+                    springLength: 250,
+                    springConstant: 0.05,
+                    avoidOverlap: 0.1
+                }
+            },
+            interaction: { hover: true }
+        };
         network = new vis.Network(container, { nodes, edges }, options);
         setupEventListeners();
     }
     
-    // UI-Teile aktualisieren
     initializeMapView(finalFilteredData);
     updateRingPanel(geoFilteredData);
 
-    // HUD & Alarme immer mit den GESAMT-Daten aktualisieren
     if (fullTopologyData.stats) updateHud(fullTopologyData.stats);
     if (fullTopologyData.alarms) updateAlarms(fullTopologyData.alarms);
     if (fullTopologyData.history_status) updateHistoryButtons(fullTopologyData.history_status);
     
-    // Ansicht-Steuerung
     const mapContainer = document.getElementById('map-container');
     const networkContainer = document.getElementById('network-container');
     const toggleBtn = document.getElementById('toggle-btn');
@@ -310,8 +333,8 @@ function renderView(mode) {
         currentView = 'topo';
     }
 }
-// --- UI-Update-Funktionen ---
 
+// --- UI-Update-Funktionen ---
 function updateAlarms(alarms) {
     const hudAlarms = document.getElementById('hud-alarms');
     hudAlarms.textContent = alarms ? alarms.length : 0;
@@ -370,8 +393,7 @@ function updateRingPanel(topology) {
 }
 
 
-// --- Karten- & Zoom-Logik (angepasst für Phase 4) ---
-
+// --- Karten- & Zoom-Logik ---
 function initializeMapView(topology) {
     if (!map) {
         const mapContainer = document.getElementById('map-container');
@@ -427,10 +449,9 @@ function syncMapWithState(topology) {
             const props = link.properties || {};
             let style = { color: getEdgeLeafletColor(link.status), weight: 2 };
             
-            // --- Logik aus formatLinkToEdge hier spiegeln ---
             if (props.link_technology === 'PtP') {
                 style.weight = 4;
-                style.color = '#9400D3'; // DarkViolet
+                style.color = '#9400D3';
             } else if (props.typ === 'Backbone') { 
                 style.weight = 5; style.color = '#FF4500'; style.dashArray = '15, 15';
             } else if (props.typ === 'Regional') { 
@@ -472,7 +493,6 @@ function handleZoom() {
     }
 }
 
-
 // --- Eigenschaften-Panel (angepasst für Phase 4) ---
 
 async function renderProperties(dataToShow) {
@@ -498,7 +518,7 @@ async function renderProperties(dataToShow) {
     }
     contentDiv.innerHTML = table;
     
-    // --- ERWEITERTE LOGIK FÜR ALLE ENDGERÄTE (ONT & Business NT) ---
+    // Logik für alle Endgeräte (ONT & Business NT)
     if (END_DEVICE_TYPES.includes(dataToShow.type)) {
         try {
             const res = await fetch(`${backendUrl}/api/devices/${dataToShow.id}/signal`);
@@ -549,7 +569,7 @@ async function renderProperties(dataToShow) {
 }
 
 
-// --- Restliche Funktionen (unverändert) ---
+// --- UI & Aktionen ---
 
 function toggleView() {
     const mapContainer = document.getElementById('map-container');
@@ -623,6 +643,24 @@ async function postAction(endpoint, payload = {}) {
         return false;
     }
 }
+
+// --- NEU FÜR PHASE 5: Logik zum Anwenden der Router-Konfiguration ---
+function applyVirtualRouterConfig() {
+    const config = {
+        wan_type: document.getElementById('vr-wan-type').value,
+        vlan_tag: document.getElementById('vr-vlan-tag').value || null,
+        pd_size_request: parseInt(document.getElementById('vr-pd-size').value, 10)
+    };
+    
+    // Setze den leeren VLAN-Tag auf null, um Konsistenz mit dem Backend zu gewährleisten
+    if (config.vlan_tag === "") {
+        config.vlan_tag = null;
+    }
+
+    console.log("Sende virtuelle Router-Konfiguration ans Backend:", config);
+    postAction('/api/simulation/virtual-router/config', config);
+}
+
 
 function simulateFiberCut() {
     const nodeId = document.getElementById('splitter-select').value;

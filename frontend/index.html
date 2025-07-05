@@ -22,7 +22,7 @@
             <button id="btn-view-local" class="view-mode-btn">Lokale Simulation (Rees)</button>
         </div>
         
-        <!-- NEU FÜR PHASE 4: Architektur-Filter -->
+        <!-- Architektur-Filter -->
         <div id="arch-filter-toggle">
             <span>Architektur:</span>
             <button id="filter-all" class="arch-filter-btn active">Alle</button>
@@ -75,6 +75,34 @@
                 <h2>Ring Status</h2>
                 <div id="ring-info" class="loader">Lade Ring-Status...</div>
             </div>
+
+            <!-- NEU FÜR PHASE 5: Panel für die virtuelle Router-Konfiguration -->
+            <div id="virtual-router-panel" class="panel">
+                <h2>Virtueller Kundenrouter</h2>
+                <div class="vr-control-group">
+                    <label for="vr-wan-type">Verbindungstyp:</label>
+                    <select id="vr-wan-type">
+                        <option value="DHCP">DHCP</option>
+                        <option value="PPPoE">PPPoE</option>
+                    </select>
+                </div>
+                <div class="vr-control-group">
+                    <label for="vr-vlan-tag">WAN VLAN Tag:</label>
+                    <input type="number" id="vr-vlan-tag" placeholder="Kein Tag">
+                </div>
+                <div class="vr-control-group">
+                    <label for="vr-pd-size">Angeforderte IPv6 PD Größe:</label>
+                    <select id="vr-pd-size">
+                        <option value="56">/56 (Korrekt)</option>
+                        <option value="64">/64 (Falsch für Subnetting)</option>
+                    </select>
+                </div>
+                <button type="button" id="vr-apply-btn">Konfiguration anwenden</button>
+                <div id="vr-status-output">
+                    <!-- Status wird hier von main.js eingefügt -->
+                </div>
+            </div>
+
             <div id="controls-panel" class="panel">
                 <h2>Steuerung</h2>
                 <div class="button-group">
