@@ -130,38 +130,39 @@ button:disabled { background-color: #555; border-color: #666; cursor: not-allowe
 .arch-filter-btn:hover { background-color: #555; color: var(--text-color); }
 .arch-filter-btn.active { background-color: var(--accent-purple-highlight); color: white; font-weight: bold; border-color: var(--accent-purple-highlight); }
 
-/* --- NEU FÜR PHASE 5 --- */
-#virtual-router-panel label {
-    display: block;
-    margin-bottom: 5px;
-    color: var(--text-muted);
-}
+#virtual-router-panel .vr-control-group { margin-bottom: 15px; }
+#virtual-router-panel label { display: block; margin-bottom: 5px; color: var(--text-muted); }
+#virtual-router-panel #vr-apply-btn { width: 100%; margin-top: 10px; background-color: var(--accent-blue-highlight); border-color: var(--accent-blue-highlight); }
+#vr-status-output { margin-top: 15px; padding: 10px; background-color: #2c2c2c; border-radius: 4px; border: 1px dashed var(--border-color); font-family: monospace; font-size: 13px; line-height: 1.5; }
+#vr-status-output p { margin: 0 0 5px 0; }
+#vr-status-output p:last-child { margin-bottom: 0; }
 
-#virtual-router-panel .vr-control-group {
-    margin-bottom: 15px;
+/* --- NEU FÜR PHASE 6 --- */
+#service-status-panel h4 {
+    margin-top: 0;
+    margin-bottom: 8px;
+    color: var(--accent-blue-highlight);
 }
-
-#virtual-router-panel #vr-apply-btn {
-    width: 100%;
-    margin-top: 10px;
-    background-color: var(--accent-blue-highlight);
-    border-color: var(--accent-blue-highlight);
-}
-
-#vr-status-output {
-    margin-top: 15px;
+.service-item {
     padding: 10px;
-    background-color: #2c2c2c;
+    border: 1px solid var(--border-color);
     border-radius: 4px;
-    border: 1px dashed var(--border-color);
-    font-family: monospace;
-    font-size: 13px;
-    line-height: 1.5;
+    margin-bottom: 15px;
+    background-color: #2c2c2c;
 }
-
-#vr-status-output p {
-    margin: 0 0 5px 0;
-}
-#vr-status-output p:last-child {
+.service-item:last-child {
     margin-bottom: 0;
+}
+.service-item p {
+    margin: 0;
+    font-size: var(--font-size-normal);
+}
+.service-item small {
+    display: block;
+    margin-top: 8px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+#sip-status-text {
+    font-weight: bold;
 }

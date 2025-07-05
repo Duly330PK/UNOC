@@ -2,7 +2,7 @@
 # UNOC - backend.py
 #
 # Main backend application with state, snapshots, and undo/redo functionality (now DB & WS driven).
-# JETZT: Erweitert für L2/L3-Verbindungssimulation (Phase 5).
+# JETZT: Erweitert für L7-Dienst-Simulation (Phase 6).
 #
 
 import yaml
@@ -68,11 +68,17 @@ app_state = {
     "redo_stack": []
 }
 
-# --- NEU FÜR PHASE 5: Konfiguration des virtuellen Kundenrouters ---
+# --- NEU/ERWEITERT FÜR PHASE 6: Konfiguration des virtuellen Routers & Dienste ---
 VIRTUAL_ROUTER_CONFIG = {
     "wan_type": "DHCP",
     "vlan_tag": None,
-    "pd_size_request": 56
+    "pd_size_request": 56,
+    "dns_server": "DG_DEFAULT" # Neuer Eintrag für DNS-Server
+}
+
+VIRTUAL_SIP_PHONE_CONFIG = {
+    "registrar": "dg.voip.dg-w.de",
+    "status": "UNREGISTERED" # Start-Status
 }
 
 # --- Datenbank-Session Management ---
@@ -319,8 +325,7 @@ def calculate_signal_power(db: DBSessionType, end_device_id_str: str):
         "path_technology": "PtP" if is_ptp_path else "PON"
     }
 
-# --- NEU FÜR PHASE 5: Emulationslogik für Layer 2/3 ---
-
+# --- Emulationslogik für Layer 2/3 (unverändert von Phase 5) ---
 def simulate_connection_attempt():
     """
     Simuliert den Verbindungsaufbau basierend auf der Konfiguration des virtuellen Routers.
@@ -354,6 +359,27 @@ def simulate_connection_attempt():
         "ipv4": {"address": ipv4_address, "type": "CGNAT"},
         "ipv6": {"prefix": ipv6_prefix, "delegated_size": pd_request_size}
     }
+
+# --- NEU FÜR PHASE 6: Emulationslogik für Layer 7 ---
+def simulate_sip_registration():
+    """Simuliert den SIP-Registrierungsversuch."""
+    
+    # Simuliere nur, wenn eine Internetverbindung besteht
+    if simulate_connection_attempt()["status"] != "CONNECTED":
+        VIRTUAL_SIP_PHONE_CONFIG["status"] = "UNREGISTERED (No Internet)"
+        return VIRTUAL_SIP_PHONE_CONFIG
+
+    # 1. DNS-Problem simulieren
+    if VIRTUAL_ROUTER_CONFIG["dns_server"] == "EXTERNAL":
+        # Der DG-interne Registrar ist im "externen" DNS nicht auflösbar
+        VIRTUAL_SIP_PHONE_CONFIG["status"] = "FAILED (Registrar not found)"
+        add_event("VOIP-SIM: SIP registration failed. Reason: Registrar DNS lookup failed with external DNS.")
+        return VIRTUAL_SIP_PHONE_CONFIG
+
+    # 2. Erfolgreiche Registrierung simulieren
+    VIRTUAL_SIP_PHONE_CONFIG["status"] = "REGISTERED"
+    add_event("VOIP-SIM: SIP registration successful with DG DNS.")
+    return VIRTUAL_SIP_PHONE_CONFIG
 
 # --- API Endpoints ---
 @app.route('/api/topology', methods=['GET'])
@@ -441,12 +467,12 @@ def set_link_utilization(link_id_str: str):
     emit_full_state_updates(db)
     return jsonify({"message": f"Utilization of link '{link_id_str}' set to {utilization}%."})
 
-# --- NEU FÜR PHASE 5: Endpunkt für die virtuelle Router-Konfiguration ---
+# --- ERWEITERT FÜR PHASE 6: Endpunkt für die virtuelle Router-Konfiguration ---
 @app.route('/api/simulation/virtual-router/config', methods=['POST'])
 def configure_virtual_router():
     """
     Nimmt eine Konfiguration vom Frontend entgegen, aktualisiert den globalen State
-    und triggert die Verbindungssimulation.
+    und triggert die Verbindungs- und Dienst-Simulation.
     """
     config_data = request.get_json()
     if not config_data:
@@ -454,15 +480,19 @@ def configure_virtual_router():
 
     # Aktualisiere die globale Konfiguration sicher
     VIRTUAL_ROUTER_CONFIG.update(config_data)
+    add_event(f"ROUTER-SIM: Received new config: {config_data}")
     
-    # Simuliere einen Verbindungs-Neustart basierend auf der neuen Konfiguration
+    # Simuliere einen Verbindungs-Neustart und den SIP-Versuch
     connection_result = simulate_connection_attempt()
+    sip_result = simulate_sip_registration()
+
+    # Sende alle relevanten Status an die Clients
+    socketio.emit('full_service_status', {
+        "connection": connection_result,
+        "sip": sip_result
+    })
     
-    # Sende das Ergebnis an alle verbundenen Clients per WebSocket
-    socketio.emit('virtual_router_status', connection_result)
-    
-    # Sende eine Bestätigung zurück an den Client, der die Anfrage gestellt hat
-    return jsonify({"message": "Virtual router reconfigured and connection attempt simulated."})
+    return jsonify({"message": "Configuration applied and services re-evaluated."})
 
 
 @app.route('/api/simulation/trace-path', methods=['POST'])

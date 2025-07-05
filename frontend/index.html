@@ -50,6 +50,20 @@
                 </div>
                 <div id="cli-output"></div>
             </div>
+            
+            <!-- NEU FÜR PHASE 6: Dienst-Status Panel -->
+            <div id="service-status-panel" class="panel">
+                <h2>Dienst-Status</h2>
+                <div id="voip-status" class="service-item">
+                    <h4>VoIP-Telefon</h4>
+                    <p>Status: <span id="sip-status-text">Warte auf Verbindung...</span></p>
+                </div>
+                <div id="iptv-status" class="service-item">
+                    <h4>IPTV (waipu.tv)</h4>
+                    <p>Status: <span id="iptv-status-text">Funktioniert (via Internet)</span></p>
+                    <small>Keine spezielle Konfiguration (VLAN, IGMP) erforderlich.</small>
+                </div>
+            </div>
         </aside>
 
         <div id="center-column">
@@ -71,12 +85,7 @@
                 <h2>Eigenschaften</h2>
                 <div id="properties-content" class="loader">Kein Element ausgewählt</div>
             </div>
-            <div id="ring-panel" class="panel">
-                <h2>Ring Status</h2>
-                <div id="ring-info" class="loader">Lade Ring-Status...</div>
-            </div>
 
-            <!-- NEU FÜR PHASE 5: Panel für die virtuelle Router-Konfiguration -->
             <div id="virtual-router-panel" class="panel">
                 <h2>Virtueller Kundenrouter</h2>
                 <div class="vr-control-group">
@@ -97,6 +106,14 @@
                         <option value="64">/64 (Falsch für Subnetting)</option>
                     </select>
                 </div>
+                <!-- NEU FÜR PHASE 6: DNS-Server Auswahl -->
+                <div class="vr-control-group">
+                    <label for="vr-dns-server">Verwendete DNS-Server:</label>
+                    <select id="vr-dns-server">
+                        <option value="DG_DEFAULT">Vom ISP zugewiesen (DG)</option>
+                        <option value="EXTERNAL">Extern (z.B. Google DNS)</option>
+                    </select>
+                </div>
                 <button type="button" id="vr-apply-btn">Konfiguration anwenden</button>
                 <div id="vr-status-output">
                     <!-- Status wird hier von main.js eingefügt -->
@@ -110,6 +127,12 @@
                     <button type="button" id="redo-btn" disabled>Redo</button>
                     <button type="button" id="reset-highlight-btn" style="background-color: #555;">Reset Highlight</button>
                 </div>
+            </div>
+            
+            <!-- Ring Panel & andere Panels könnten hier folgen, je nach Layout-Priorität -->
+            <div id="ring-panel" class="panel">
+                <h2>Ring Status</h2>
+                <div id="ring-info" class="loader">Lade Ring-Status...</div>
             </div>
             <div id="scenario-panel" class="panel">
                 <h2>Szenarien</h2>

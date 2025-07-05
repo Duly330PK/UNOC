@@ -1,5 +1,5 @@
 /*
- * UNOC - main.js (v10 - L2/L3 Simulation für Phase 5)
+ * UNOC - main.js (v11 - L7 Service Simulation for Phase 6)
  */
 
 // --- Globale Variablen & Zustand ---
@@ -127,7 +127,7 @@ function formatLinkToEdge(l) {
     return edge;
 }
 
-// --- setupEventListeners (angepasst für Phase 5) ---
+// --- setupEventListeners ---
 function setupEventListeners() {
     // Geografischer Ansicht-Umschalter
     document.getElementById('btn-view-national').addEventListener('click', () => renderView('national'));
@@ -153,10 +153,10 @@ function setupEventListeners() {
     document.getElementById('filter-pon').addEventListener('click', () => applyArchFilter('PON'));
     document.getElementById('filter-ptp').addEventListener('click', () => applyArchFilter('PtP'));
 
-    // --- NEU FÜR PHASE 5: Virtueller Router ---
+    // Virtueller Router
     document.getElementById('vr-apply-btn').addEventListener('click', applyVirtualRouterConfig);
 
-    // CLI, Snapshots, Undo/Redo bleiben gleich
+    // CLI, Snapshots, Undo/Redo
     document.getElementById('cli-input')?.addEventListener('keydown', handleCliKeyDown);
     document.getElementById('save-snapshot-btn')?.addEventListener('click', saveSnapshot);
     document.getElementById('load-snapshot-btn')?.addEventListener('click', loadSnapshot);
@@ -165,7 +165,7 @@ function setupEventListeners() {
     document.getElementById('redo-btn')?.addEventListener('click', () => postAction('/api/simulation/redo'));
 }
 
-// --- Initialisierung & WebSocket (angepasst für Phase 5) ---
+// --- Initialisierung & WebSocket ---
 async function initialize() {
     initializeWebSocket();
 }
@@ -199,25 +199,41 @@ function initializeWebSocket() {
         if (eventLog.children.length > 100) eventLog.removeChild(eventLog.lastChild);
     });
 
-    // --- NEU FÜR PHASE 5: WebSocket-Handler für den Router-Status ---
-    socket.on('virtual_router_status', (data) => {
-        const output = document.getElementById('vr-status-output');
-        if (!output) return;
-
-        if (data.status === 'CONNECTED') {
-            output.innerHTML = `
-                <p style="color: var(--accent-green);">Status: Verbunden</p>
-                <p>IPv4: ${data.ipv4.address} (${data.ipv4.type})</p>
-                <p>IPv6: ${data.ipv6.prefix} (Angefordert: /${data.ipv6.delegated_size})</p>
-            `;
-            if (data.ipv6.delegated_size != 56) {
-                output.innerHTML += `<p style="color: var(--accent-red);">WARNUNG: Subnetting nicht möglich!</p>`;
+    // --- ERWEITERT FÜR PHASE 6: WebSocket-Handler für den gesamten Dienst-Status ---
+    socket.on('full_service_status', (data) => {
+        console.log("Full service status received:", data);
+        
+        // Update des Verbindungsstatus (L2/L3)
+        const connection = data.connection;
+        const vrOutput = document.getElementById('vr-status-output');
+        if (vrOutput && connection) {
+            if (connection.status === 'CONNECTED') {
+                vrOutput.innerHTML = `
+                    <p style="color: var(--accent-green);">Status: Verbunden</p>
+                    <p>IPv4: ${connection.ipv4.address} (${connection.ipv4.type})</p>
+                    <p>IPv6: ${connection.ipv6.prefix} (Angefordert: /${connection.ipv6.delegated_size})</p>
+                `;
+                if (connection.ipv6.delegated_size != 56) {
+                    vrOutput.innerHTML += `<p style="color: var(--accent-red);">WARNUNG: Subnetting nicht möglich!</p>`;
+                }
+            } else {
+                vrOutput.innerHTML = `
+                    <p style="color: var(--accent-red);">Status: Fehlgeschlagen</p>
+                    <p>Grund: ${connection.reason}</p>
+                `;
             }
-        } else {
-            output.innerHTML = `
-                <p style="color: var(--accent-red);">Status: Fehlgeschlagen</p>
-                <p>Grund: ${data.reason}</p>
-            `;
+        }
+
+        // Update des SIP-Status (L7)
+        const sip = data.sip;
+        const sipStatusEl = document.getElementById('sip-status-text');
+        if (sipStatusEl && sip) {
+            sipStatusEl.textContent = sip.status;
+            if (sip.status.includes('FAILED') || sip.status.includes('UNREGISTERED')) {
+                sipStatusEl.style.color = 'var(--accent-red)';
+            } else {
+                sipStatusEl.style.color = 'var(--accent-green)';
+            }
         }
     });
 
@@ -644,15 +660,15 @@ async function postAction(endpoint, payload = {}) {
     }
 }
 
-// --- NEU FÜR PHASE 5: Logik zum Anwenden der Router-Konfiguration ---
+// --- ERWEITERT FÜR PHASE 6: Logik zum Anwenden der Router-Konfiguration ---
 function applyVirtualRouterConfig() {
     const config = {
         wan_type: document.getElementById('vr-wan-type').value,
         vlan_tag: document.getElementById('vr-vlan-tag').value || null,
-        pd_size_request: parseInt(document.getElementById('vr-pd-size').value, 10)
+        pd_size_request: parseInt(document.getElementById('vr-pd-size').value, 10),
+        dns_server: document.getElementById('vr-dns-server').value
     };
     
-    // Setze den leeren VLAN-Tag auf null, um Konsistenz mit dem Backend zu gewährleisten
     if (config.vlan_tag === "") {
         config.vlan_tag = null;
     }
