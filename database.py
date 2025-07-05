@@ -12,7 +12,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-print(f"DEBUG: Geladene DATABASE_URL: '{DATABASE_URL}'")
+# Das Debug-Print kann für die Produktion entfernt werden
+# print(f"DEBUG: Geladene DATABASE_URL: '{DATABASE_URL}'")
 if not DATABASE_URL:
     raise ValueError("Keine DATABASE_URL in der .env-Datei gefunden!")
 
@@ -22,8 +23,8 @@ Base = declarative_base()
 
 # Assoziationstabelle für die Many-to-Many-Beziehung zwischen Ring und Device
 ring_device_association = Table('ring_device_association', Base.metadata,
-    Column('ring_id', Integer, ForeignKey('rings.id')),
-    Column('device_id', Integer, ForeignKey('devices.id'))
+    Column('ring_id', Integer, ForeignKey('rings.id'), primary_key=True),
+    Column('device_id', Integer, ForeignKey('devices.id'), primary_key=True)
 )
 
 class Device(Base):
@@ -33,16 +34,14 @@ class Device(Base):
     type = Column(String, nullable=False)
     status = Column(String, default="online")
     properties = Column(JSON, default={})
-    coordinates = Column(JSON)  # Speichert [lat, lon]
+    coordinates = Column(JSON)
 
-    # Neue mögliche Felder in properties z. B.:
-    # - splicing_count
-    # - insertion_loss
-    # - model
-    # - firmware_version
+    # KORREKTUR: back_populates hinzugefügt, um die Beziehung explizit zu machen
+    links_as_source = relationship("Link", foreign_keys="[Link.source_id]", back_populates="source")
+    links_as_target = relationship("Link", foreign_keys="[Link.target_id]", back_populates="target")
 
-    links_as_source = relationship("Link", foreign_keys="[Link.source_id]")
-    links_as_target = relationship("Link", foreign_keys="[Link.target_id]")
+    # KORREKTUR: back_populates auch für die Many-to-Many-Beziehung hinzugefügt
+    rings = relationship("Ring", secondary=ring_device_association, back_populates="nodes")
 
 class Link(Base):
     __tablename__ = "links"
@@ -53,14 +52,9 @@ class Link(Base):
     status = Column(String, default="up")
     properties = Column(JSON, default={})
 
-    # Neue mögliche Felder in properties z. B.:
-    # - attenuation_db_per_km
-    # - total_loss_db
-    # - fiber_type
-    # - length_km
-
-    source = relationship("Device", foreign_keys=[source_id])
-    target = relationship("Device", foreign_keys=[target_id])
+    # KORREKTUR: back_populates hinzugefügt, um die Beziehung explizit zu machen
+    source = relationship("Device", foreign_keys=[source_id], back_populates="links_as_source")
+    target = relationship("Device", foreign_keys=[target_id], back_populates="links_as_target")
 
 class Ring(Base):
     __tablename__ = "rings"
@@ -69,7 +63,8 @@ class Ring(Base):
     name = Column(String)
     rpl_link_id_str = Column(String, nullable=False)
     
-    nodes = relationship("Device", secondary=ring_device_association)
+    # KORREKTUR: back_populates auch für die Many-to-Many-Beziehung hinzugefügt
+    nodes = relationship("Device", secondary=ring_device_association, back_populates="rings")
 
 class Alarm(Base):
     __tablename__ = "alarms"

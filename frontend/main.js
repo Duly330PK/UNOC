@@ -1,5 +1,5 @@
 /*
- * UNOC - main.js (v6 - GeoJSON & Zoom-Logik Integration)
+ * UNOC - main.js (v8 - View Toggling Logic)
  */
 
 // --- Globale Variablen & Zustand ---
@@ -9,10 +9,12 @@ let network = null, map = null, nodes = new vis.DataSet([]), edges = new vis.Dat
 let mapMarkers = {}, mapLines = {}, currentView = 'topo';
 let highlightedPath = { nodes: [], links: [] };
 let selectedId = null;
-let selectedType = null; // 'device' oder 'link'
+let selectedType = null;
 
-// NEU: Konfiguration für die Kartenansicht
-const ZOOM_THRESHOLD = 7; // Ab welchem Zoom-Level werden regionale Details sichtbar?
+let fullTopologyData = null; // Speichert die komplette, ungefilterte Topologie
+let activeViewMode = 'national'; // Startet mit der nationalen Ansicht
+
+const ZOOM_THRESHOLD = 7; 
 
 const statusToColor = {
     online: { border: "#4CAF50", background: "#2e7d32" },
@@ -30,35 +32,61 @@ const getEdgeLeafletColor = (status) => (statusToColor[status] || { color: '#9E9
 
 function formatDeviceToNode(d) {
     const node = {
-        id: d.id, // ID ist jetzt die device_id_str
-        label: d.type === 'POP' || d.type === 'Core Node' ? d.id : `${d.type}\n(${d.id})`,
+        id: d.id,
+        label: `${d.type}\n(${d.id})`,
         shape: 'box',
         borderWidth: 1,
-        color: statusToColor[d.status],
+        color: statusToColor[d.status] || { border: '#9E9E9E', background: '#616161' },
         font: { color: '#ffffff' },
         data: d,
     };
 
-    // Spezifische Stile für neue Typen
-    if (d.type === 'Core Node') {
-        node.shape = 'database';
-        node.color = { border: '#00BFFF', background: '#202A40' };
-        node.size = 25;
-        node.font = { color: '#00BFFF', size: 14 };
-    } else if (d.type === 'POP') {
-        node.shape = 'box';
-        node.color = { border: '#8A2BE2', background: '#301934' };
+    switch (d.type) {
+        case 'Core Node':
+            node.shape = 'database';
+            node.color = { border: '#00BFFF', background: '#202A40' };
+            node.size = 30;
+            node.label = d.id;
+            node.font = { color: '#00BFFF', size: 16 };
+            break;
+        case 'POP':
+            node.shape = 'database';
+            node.color = { border: '#FFFFFF', background: '#007BFF' };
+            node.size = 25;
+            node.label = d.id;
+            break;
+        case 'NVt':
+            node.shape = 'box';
+            node.label = `NVt\n${d.properties.model || ''}`;
+            node.color = { border: '#cccccc', background: '#888888' };
+            break;
+        case 'HÜP':
+            node.shape = 'dot';
+            node.size = 10;
+            node.label = 'HÜP';
+            node.color = { border: '#FFFFFF', background: '#AAAAAA' };
+            break;
+        case 'ODF':
+            node.shape = 'box';
+            node.label = 'ODF';
+            node.color = { border: '#cccccc', background: '#555555' };
+            break;
+        case 'OLT':
+            node.color = { border: '#f5b041', background: '#873600' };
+            break;
+        case 'Splitter':
+            node.color = { border: '#a569bd', background: '#5b2c6f' };
+            break;
     }
-
+    
     return node;
 }
-
 function formatLinkToEdge(l) {
     const edge = {
-        id: l.id, // ID ist jetzt die link_id_str
+        id: l.id,
         from: l.source,
         to: l.target,
-        width: 2, // Standardbreite
+        width: 2,
         color: (statusToColor[l.status] || {}).color || '#9E9E9E',
         arrows: 'to, from',
         dashes: l.status === 'blocking' ? [5, 5] : false,
@@ -67,16 +95,15 @@ function formatLinkToEdge(l) {
         font: { color: '#aaa', size: 11, align: 'top', strokeWidth: 3, strokeColor: '#1a1a1a' }
     };
 
-    // NEU: Logik zur Überschreibung der Stile für Backbone- und Regional-Links
     const props = l.properties;
     if (props && props.typ) {
         if (props.typ === 'Backbone') {
-            edge.color = { color: '#FF4500' }; // Orangered
+            edge.color = { color: '#FF4500' };
             edge.width = 4;
             edge.dashes = [10, 10];
             edge.label = 'Backbone';
         } else if (props.typ === 'Regional') {
-            edge.color = { color: '#8A2BE2' }; // BlueViolet
+            edge.color = { color: '#8A2BE2' };
             edge.width = 2.5;
             edge.dashes = [5, 5];
             edge.label = 'Regional';
@@ -85,7 +112,50 @@ function formatLinkToEdge(l) {
     return edge;
 }
 
-// --- Initialisierung ---
+// --- setupEventListeners: Direkt nach den Formatierern eingefügt ---
+function setupEventListeners() {
+    // Umschalter für die Ansicht (national/local)
+    document.getElementById('btn-view-national').addEventListener('click', () => renderView('national'));
+    document.getElementById('btn-view-local').addEventListener('click', () => renderView('local'));
+
+    // Toggle zwischen Karten- und Topologieansicht
+    document.getElementById('toggle-btn').addEventListener('click', toggleView);
+
+    // Beispiel: Klick auf das vis.js Netzwerk
+    if (network) {
+        network.on('click', params => {
+            if (params.nodes && params.nodes.length > 0) {
+                const nodeId = params.nodes[0];
+                const nodeData = nodes.get(nodeId);
+                renderProperties(nodeData.data);
+            } else {
+                renderProperties(null);
+            }
+        });
+    }
+
+    // CLI-Events
+    const cliInput = document.getElementById('cli-input');
+    if (cliInput) {
+        cliInput.addEventListener('keydown', handleCliKeyDown);
+        cliInput.addEventListener('input', debounce(handleAutocomplete, 150));
+    }
+
+    // Snapshot-Funktionen
+    document.getElementById('save-snapshot-btn')?.addEventListener('click', saveSnapshot);
+    document.getElementById('load-snapshot-btn')?.addEventListener('click', loadSnapshot);
+
+    // Fiber-Cut Simulation
+    document.getElementById('simulate-fiber-cut-btn')?.addEventListener('click', simulateFiberCut);
+
+    // Undo/Redo
+    document.getElementById('undo-btn')?.addEventListener('click', () => postAction('/api/simulation/undo'));
+    document.getElementById('redo-btn')?.addEventListener('click', () => postAction('/api/simulation/redo'));
+
+    // ... hier kannst du beliebig weitere Events hinzufügen ...
+}
+
+// --- Initialisierung & WebSocket ---
 async function initialize() {
     initializeWebSocket();
 }
@@ -99,59 +169,15 @@ function initializeWebSocket() {
     });
 
     socket.on('initial_topology', (data) => {
-        console.log("Initiale Topologie empfangen:", data);
-        
-        nodes.clear();
-        edges.clear();
-        
-        const formattedNodes = data.devices.map(d => formatDeviceToNode({ ...d, id: d.id }));
-        const formattedEdges = data.links.map(l => formatLinkToEdge({ ...l, id: l.id }));
-
-        nodes.add(formattedNodes);
-        edges.add(formattedEdges);
-
-        if (!network) {
-            const container = document.getElementById('network-container');
-            network = new vis.Network(container, { nodes, edges }, { interaction: { hover: true } });
-            setupEventListeners();
-        }
-        
-        if(data.rings) updateRingPanel(data);
-        initializeMapView(data);
-
-        const splitterSelect = document.getElementById('splitter-select');
-        splitterSelect.innerHTML = '';
-        data.devices.filter(d => d.type.toLowerCase() === 'splitter').forEach(d => {
-            const option = document.createElement('option');
-            option.value = d.id;
-            option.textContent = d.id;
-            splitterSelect.appendChild(option);
-        });
-
-        if (data.stats) updateHud(data.stats);
-        if (data.history_status) updateHistoryButtons(data.history_status);
-        if (data.alarms) updateAlarms(data.alarms);
+        console.log("Initiale Topologie empfangen, speichere sie...", data);
+        fullTopologyData = data;
+        renderView(activeViewMode);
     });
 
     socket.on('full_state_update', (data) => {
-        console.log("Full State Update empfangen:", data);
-        
-        const updatedNodes = data.devices.map(d => formatDeviceToNode({ ...d, id: d.id }));
-        nodes.update(updatedNodes);
-
-        const updatedLinks = data.links.map(l => formatLinkToEdge({ ...l, id: l.id }));
-        edges.update(updatedLinks);
-
-        updateHud(data.stats);
-        updateHistoryButtons(data.history_status);
-        updateRingPanel(data);
-        updateAlarms(data.alarms);
-        syncMapWithState(data);
-
-        if (selectedId) {
-            const selectedData = data.devices.find(d => d.id === selectedId) || data.links.find(l => l.id === selectedId);
-            if (selectedData) renderProperties(selectedData);
-        }
+        console.log("Full State Update empfangen, aktualisiere Ansicht...");
+        fullTopologyData = data;
+        renderView(activeViewMode);
     });
     
     socket.on('new_event', (event_message) => {
@@ -162,14 +188,101 @@ function initializeWebSocket() {
             eventLog.innerHTML = '';
         }
         eventLog.prepend(newLi);
-        while (eventLog.children.length > 100) {
-            eventLog.removeChild(eventLog.lastChild);
-        }
+        while (eventLog.children.length > 100) { eventLog.removeChild(eventLog.lastChild); }
     });
 
     socket.on('disconnect', () => {
         showModal('Verbindung getrennt', 'Verbindung zum Backend verloren. Bitte Seite neu laden.', [{ text: 'OK', class: 'modal-btn-danger', callback: () => window.location.reload() }]);
     });
+}
+function renderView(mode) {
+    if (!fullTopologyData) {
+        console.error("Keine Topologiedaten zum Rendern vorhanden.");
+        return;
+    }
+
+    activeViewMode = mode;
+    console.log(`Ansicht wird auf "${activeViewMode}" umgeschaltet.`);
+
+    // Buttons-Stil aktualisieren
+    document.getElementById('btn-view-national').classList.toggle('active', mode === 'national');
+    document.getElementById('btn-view-local').classList.toggle('active', mode === 'local');
+
+    // Daten filtern basierend auf der 'data_source' Eigenschaft
+    let filteredData = { devices: [], links: [], rings: [] };
+    
+    if (mode === 'national') {
+        filteredData.devices = fullTopologyData.devices.filter(d => d.properties?.data_source === 'geojson');
+        const nationalDeviceIds = new Set(filteredData.devices.map(d => d.id));
+        filteredData.links = fullTopologyData.links.filter(l => 
+            nationalDeviceIds.has(l.source) && nationalDeviceIds.has(l.target)
+        );
+    } else { // mode === 'local'
+        filteredData.devices = fullTopologyData.devices.filter(d => d.properties?.data_source === 'rees_topology');
+        const localDeviceIds = new Set(filteredData.devices.map(d => d.id));
+        filteredData.links = fullTopologyData.links.filter(l => 
+            localDeviceIds.has(l.source) && localDeviceIds.has(l.target)
+        );
+        filteredData.rings = fullTopologyData.rings ? fullTopologyData.rings.filter(r => r.id.includes("REES")) : [];
+    }
+    
+    // UI mit den GEFILTERTEN Daten neu aufbauen
+    nodes.clear();
+    edges.clear();
+
+    nodes.add(filteredData.devices.map(d => formatDeviceToNode({ ...d, id: d.id })));
+    edges.add(filteredData.links.map(l => formatLinkToEdge({ ...l, id: l.id })));
+    
+    // KORREKTUR: Netzwerk-Initialisierung und Event-Listener-Setup hierher verschoben
+    if (!network) {
+        // Wird nur beim allerersten Aufruf ausgeführt
+        const container = document.getElementById('network-container');
+        const options = {
+    physics: {
+        barnesHut: {
+            gravitationalConstant: -4000,
+            springLength: 250, // Macht die "Federn" der Links länger
+            springConstant: 0.05,
+            avoidOverlap: 0.1
+        }
+    },
+    interaction: {
+        hover: true
+    }
+};
+network = new vis.Network(container, { nodes, edges }, options);
+        setupEventListeners(); // HIER werden die Knöpfe jetzt funktionsfähig gemacht
+    } else {
+        // Bei allen weiteren Aufrufen werden nur die Daten aktualisiert
+        network.setData({ nodes, edges });
+    }
+
+    // Andere UI-Teile mit den gefilterten Daten aktualisieren
+    initializeMapView(filteredData);
+    updateRingPanel(filteredData);
+
+    // HUD und Alarme mit den GESAMT-Daten aktualisieren
+    if (fullTopologyData.stats) updateHud(fullTopologyData.stats);
+    if (fullTopologyData.alarms) updateAlarms(fullTopologyData.alarms);
+    if (fullTopologyData.history_status) updateHistoryButtons(fullTopologyData.history_status);
+    
+    // Ansicht-Steuerung (Karte/Topologie)
+    const mapContainer = document.getElementById('map-container');
+    const networkContainer = document.getElementById('network-container');
+    const toggleBtn = document.getElementById('toggle-btn');
+
+    if (mode === 'national') {
+        mapContainer.style.visibility = 'visible';
+        networkContainer.style.visibility = 'hidden';
+        toggleBtn.textContent = 'Topologieansicht';
+        currentView = 'map';
+        if (map) map.invalidateSize();
+    } else { // mode === 'local'
+        mapContainer.style.visibility = 'hidden';
+        networkContainer.style.visibility = 'visible';
+        toggleBtn.textContent = 'Kartenansicht';
+        currentView = 'topo';
+    }
 }
 
 // --- UI-Update-Funktionen ---
@@ -179,7 +292,12 @@ function updateAlarms(alarms) {
     hudAlarms.textContent = alarms ? alarms.length : 0;
     hudAlarms.style.color = (alarms && alarms.length > 0) ? 'var(--accent-red)' : 'var(--accent-green)';
 
-    nodes.update(nodes.getIds().map(id => ({ id, icon: undefined })));
+    nodes.getIds().forEach(nodeId => {
+        const node = nodes.get(nodeId);
+        if (node && node.icon) {
+            nodes.update({ id: nodeId, icon: undefined });
+        }
+    });
 
     if (alarms) {
         alarms.forEach(alarm => {
@@ -200,7 +318,6 @@ function updateHud(stats) {
     alarmsEl.textContent = stats.alarms;
     alarmsEl.style.color = stats.alarms > 0 ? 'var(--accent-red)' : 'var(--accent-green)';
 }
-
 function updateHistoryButtons(status) {
     document.getElementById('undo-btn').disabled = !status.can_undo;
     document.getElementById('redo-btn').disabled = !status.can_redo;
@@ -214,7 +331,8 @@ function updateRingPanel(topology) {
     }
     let html = '<table>';
     topology.rings.forEach(ring => {
-        const rpl = topology.links.find(l => l.id === ring.rpl_link_id);
+        // Finde den Link im VOLLEN Datensatz, da er in der gefilterten Ansicht fehlen könnte
+        const rpl = fullTopologyData.links.find(l => l.id === ring.rpl_link_id_str);
         if (rpl) {
             const statusClass = rpl.status === 'blocking' ? 'status-blocking' : 'status-forwarding';
             html += `<tr><td><b>${ring.name}</b></td><td class="${statusClass}">${rpl.status.toUpperCase()}</td></tr>`;
@@ -225,17 +343,14 @@ function updateRingPanel(topology) {
 
 // --- Karten- & Zoom-Logik ---
 
-// --- Karten- & Zoom-Logik ---
-
 function initializeMapView(topology) {
     if (!map) {
         const mapContainer = document.getElementById('map-container');
         if (mapContainer) {
-            map = L.map(mapContainer).setView([51.5, 10.5], 6); // Start-Zoom auf Deutschland
+            map = L.map(mapContainer).setView([51.5, 10.5], 6);
             L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
                 attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 20
             }).addTo(map);
-
             map.on('zoomend', handleZoom);
         } else {
             console.error("Map container not found!");
@@ -248,67 +363,43 @@ function initializeMapView(topology) {
     mapMarkers = {};
     mapLines = {};
 
-    // Erstellt die Marker und fügt den Klick-Handler hinzu
     topology.devices.forEach(device => {
         if (device.coordinates && device.coordinates.length === 2) {
             const marker = L.marker([device.coordinates[1], device.coordinates[0]])
                 .addTo(map)
                 .bindPopup(`<b>${device.id}</b><br>${device.type}`);
-
-            // Klick-Event-Handler für den Marker hinzugefügt
             marker.on('click', () => {
                 selectedId = device.id;
                 selectedType = 'device';
                 renderProperties(device);
-                if (network) {
-                    network.selectNodes([device.id]);
-                }
+                if (network) { network.selectNodes([device.id]); }
             });
-
             mapMarkers[device.id] = marker;
         }
     });
 
-    // Erstellt die Linien zwischen den Markern
     topology.links.forEach(link => {
         const source = topology.devices.find(d => d.id === link.source);
         const target = topology.devices.find(d => d.id === link.target);
         if (source?.coordinates && target?.coordinates) {
-            const latlngs = [
-                [source.coordinates[1], source.coordinates[0]],
-                [target.coordinates[1], target.coordinates[0]]
-            ];
+            const latlngs = [ [source.coordinates[1], source.coordinates[0]], [target.coordinates[1], target.coordinates[0]] ];
             mapLines[link.id] = L.polyline(latlngs).addTo(map);
         }
     });
 
-    // Diese Aufrufe gehören an das Ende von initializeMapView
     syncMapWithState(topology);
     handleZoom();
-} // <-- Die Funktion initializeMapView endet hier.
+}
 
-
-// Die folgenden Funktionen sind jetzt korrekt außerhalb definiert.
 function syncMapWithState(topology) {
     if (!map) return;
-    
     topology.links.forEach(link => {
         if (mapLines[link.id]) {
             const props = link.properties;
             let style = { color: getEdgeLeafletColor(link.status), weight: 2 };
-
-            if (props?.typ === 'Backbone') {
-                style.weight = 5;
-                style.color = '#FF4500';
-                style.dashArray = '15, 15';
-            } else if (props?.typ === 'Regional') {
-                style.weight = 3;
-                style.color = '#8A2BE2';
-                style.dashArray = '8, 8';
-            } else if (link.status === 'blocking') {
-                style.dashArray = '5, 5';
-            }
-            
+            if (props?.typ === 'Backbone') { style.weight = 5; style.color = '#FF4500'; style.dashArray = '15, 15'; } 
+            else if (props?.typ === 'Regional') { style.weight = 3; style.color = '#8A2BE2'; style.dashArray = '8, 8'; } 
+            else if (link.status === 'blocking') { style.dashArray = '5, 5'; }
             mapLines[link.id].setStyle(style);
         }
     });
@@ -324,7 +415,7 @@ function handleZoom() {
         if (!node) continue;
         
         if (node.data.type === 'Core Node') {
-            marker.setOpacity(1); // Core Nodes sind immer sichtbar.
+            marker.setOpacity(1); 
         } else {
             marker.setOpacity(zoomLevel > ZOOM_THRESHOLD ? 1 : 0);
         }
@@ -336,7 +427,7 @@ function handleZoom() {
         if (!edge) continue;
 
         if (edge.data.properties?.typ === 'Backbone') {
-            line.setStyle({ opacity: 1 }); // Backbone-Links sind immer sichtbar.
+            line.setStyle({ opacity: 1 });
         } else {
             line.setStyle({ opacity: zoomLevel > ZOOM_THRESHOLD ? 1 : 0 });
         }
@@ -352,12 +443,10 @@ async function renderProperties(dataToShow) {
     }
 
     let table = '<table>';
-    // Basis-Eigenschaften
     table += `<tr><th>ID</th><td>${dataToShow.id}</td></tr>`;
     table += `<tr><th>Typ</th><td>${dataToShow.type}</td></tr>`;
     if (dataToShow.status) table += `<tr><th>Status</th><td>${dataToShow.status}</td></tr>`;
 
-    // NEU: Spezifische Anzeige für Core Nodes
     if (dataToShow.type === 'Core Node') {
         const props = dataToShow.properties;
         table += '</table><h3 style="text-align:center; background-color: #333; margin: 15px 0 0; padding: 8px;">Core Network Details</h3><table>';
@@ -366,7 +455,6 @@ async function renderProperties(dataToShow) {
         table += `<tr><th>Kapazität</th><td>${props.peering_capacity_gbit || 'N/A'} Gbit/s</td></tr>`;
         table += `<tr><th>AS-Nummern</th><td>${props.as_numbers || 'N/A'}</td></tr>`;
     } 
-    // Anzeige der generischen Properties
     else if (dataToShow.properties && Object.keys(dataToShow.properties).length > 0) {
         table += '</table><h3 style="text-align:center; background-color: #333; margin: 15px 0 0; padding: 8px;">Properties</h3><table>';
         for (const [propKey, propValue] of Object.entries(dataToShow.properties)) {
@@ -377,7 +465,6 @@ async function renderProperties(dataToShow) {
 
     contentDiv.innerHTML = table;
     
-    // Signalpegel-Logik für ONTs
     if (dataToShow.type === 'ONT') {
         try {
             const response = await fetch(`${backendUrl}/api/devices/${dataToShow.id}/signal`);
@@ -394,11 +481,9 @@ async function renderProperties(dataToShow) {
             }
 
             if (signalCellHTML) {
-                const tableElement = contentDiv.querySelector('table');
-                if (tableElement) {
-                    // Find the last table to append to
-                    const tables = contentDiv.querySelectorAll('table');
-                    const lastTable = tables[tables.length - 1];
+                const tables = contentDiv.querySelectorAll('table');
+                const lastTable = tables[tables.length - 1];
+                if (lastTable) {
                     lastTable.innerHTML += `<tr><th style="text-align:center;" colspan="2">Signal Level</th></tr><tr>${signalCellHTML}</tr>`;
                 }
             }
@@ -407,7 +492,6 @@ async function renderProperties(dataToShow) {
         }
     }
 }
-
 
 function toggleView() {
     const mapContainer = document.getElementById('map-container');
@@ -419,7 +503,7 @@ function toggleView() {
         networkContainer.style.visibility = 'hidden';
         toggleBtn.textContent = 'Topologieansicht';
         currentView = 'map';
-        if (map) map.invalidateSize(); // Wichtig, damit die Karte korrekt gerendert wird
+        if (map) map.invalidateSize();
     } else {
         mapContainer.style.visibility = 'hidden';
         networkContainer.style.visibility = 'visible';
@@ -449,44 +533,6 @@ function showModal(title, message, buttons = [{ text: 'OK', class: 'modal-btn-pr
 function hideModal() {
     document.getElementById('modal-overlay').classList.add('hidden');
 }
-
-function setupEventListeners() {
-    network.on('click', params => {
-        const elementId = params.nodes[0] || params.edges[0];
-        if (elementId) {
-            selectedId = elementId;
-            selectedType = params.nodes.length ? 'device' : 'link';
-            const dataSet = selectedType === 'device' ? nodes : edges;
-            const itemData = dataSet.get(selectedId);
-            if (itemData) {
-                 renderProperties(itemData.data || itemData); // data-Attribut bei gruppierten Nodes
-            }
-        } else {
-            selectedId = null;
-            selectedType = null;
-            renderProperties(null);
-            resetHighlight();
-        }
-    });
-
-    document.getElementById('toggle-btn').addEventListener('click', toggleView);
-    document.getElementById('undo-btn').addEventListener('click', () => postAction('/api/simulation/undo'));
-    document.getElementById('redo-btn').addEventListener('click', () => postAction('/api/simulation/redo'));
-    document.getElementById('reset-highlight-btn').addEventListener('click', resetHighlight);
-    document.getElementById('fiber-cut-btn').addEventListener('click', simulateFiberCut);
-    document.getElementById('save-snapshot-btn').addEventListener('click', saveSnapshot);
-    document.getElementById('load-snapshot-btn').addEventListener('click', loadSnapshot);
-    document.getElementById('cli-input').addEventListener('keydown', handleCliKeyDown);
-    document.getElementById('cli-input').addEventListener('keyup', debounce(handleAutocomplete, 250));
-
-    document.addEventListener('click', (e) => {
-        if (document.getElementById('cli-suggestions') &&
-            !document.getElementById('cli-interaction-area').contains(e.target)) {
-            clearSuggestions();
-        }
-    });
-}
-
 // --- Aktionen & CLI ---
 
 async function postAction(endpoint, payload = {}) {
@@ -510,7 +556,6 @@ async function postAction(endpoint, payload = {}) {
         }
 
         if (endpoint.includes('/api/snapshot/load')) {
-            // Nach dem Laden eines Snapshots, fordern wir die neuen Daten an
             socket.emit('request_initial_data');
         }
 
@@ -589,7 +634,6 @@ function showCliOutput(message, type = 'info') {
     cliOutput.querySelector('div:last-child').style.color = colorMap[type] || colorMap.info;
     cliOutput.scrollTop = cliOutput.scrollHeight;
 }
-
 async function handleCliCommand(inputElement) {
     const commandStr = inputElement.value.trim();
     if (!commandStr) return;
@@ -717,7 +761,6 @@ function handleCliKeyDown(event) {
         clearSuggestions();
     }
 }
-
 function handleAutocomplete(event) {
     const text = event.target.value;
     const parts = text.split(' ');

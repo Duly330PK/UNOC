@@ -23,14 +23,18 @@ header {
     padding: 10px 20px;
     border-bottom: 1px solid var(--border-color);
     flex-shrink: 0;
+    /* NEU: Flexbox für die Ausrichtung der neuen Buttons */
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
 }
-h1 { font-size: 1.5em; }
+h1 { font-size: 1.5em; margin: 0; }
 h2 { font-size: 1.2em; border-bottom: 1px solid #555; padding-bottom: 8px; margin: 0 0 12px 0; }
 
 main {
     display: flex;
     flex-grow: 1;
-    height: calc(100% - 100px);
+    height: calc(100% - 100px); /* Höhe anpassen, falls Header höher wird */
 }
 
 #left-sidebar {
@@ -209,4 +213,31 @@ button:disabled { background-color: #555; border-color: #666; cursor: not-allowe
 /* Wird per JS hinzugefügt/entfernt */
 .hidden-by-zoom {
     display: none !important;
+}
+
+/* NEU: Stile für den Ansicht-Umschalter */
+#view-mode-toggle {
+    display: flex;
+    gap: 5px;
+}
+
+.view-mode-btn {
+    background-color: #444;
+    border: 1px solid #666;
+    color: var(--text-muted);
+    padding: 5px 15px;
+    margin-bottom: 0; /* Überschreibt generisches Button-Margin */
+    transition: all 0.2s ease-in-out;
+}
+
+.view-mode-btn:hover {
+    background-color: #555;
+    color: var(--text-color);
+}
+
+.view-mode-btn.active {
+    background-color: var(--accent-blue-highlight);
+    color: white;
+    font-weight: bold;
+    border-color: var(--accent-blue-highlight);
 }

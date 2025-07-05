@@ -1,91 +1,14 @@
 #
-# UNOC - seed.py (final, konsolidiert)
+# UNOC - seed.py (final, konsolidiert für Phase 2 - mit data_source)
 #
-# Liest zuerst die detaillierte YAML-Topologie und anschließend die
-# deutschlandweiten GeoJSON-Netzwerkdaten und befüllt die PostgreSQL-Datenbank.
+# Lädt die deutschlandweite GeoJSON-Struktur und anschließend die
+# detaillierte Referenz-Topologie für Rees und markiert die Datenquellen.
 #
 
 import yaml
 import json
-from sqlalchemy import text
 from sqlalchemy.orm import Session
-from database import SessionLocal, init_db, Device, Link, Ring
-
-def seed_from_yaml(db: Session):
-    """
-    Lädt die detaillierte Referenz-Topologie aus topology.yml.
-    Diese Funktion führt einen "harten Reset" der Datenbank durch.
-    """
-    print("Prüfe, ob YAML-Seeding notwendig ist...")
-    # Wir nehmen an, dass das YAML immer die Basis ist und löschen vorher alles.
-    # Die Prüfung auf OLT-MST-01 ist hier weniger relevant, da wir immer resetten.
-    
-    # --- ALLES LÖSCHEN ---
-    print("Lösche alte Daten (Devices, Links, Rings, Zwischentabelle)...")
-    # Reihenfolge wichtig wegen Foreign Keys!
-    db.execute(text("DELETE FROM ring_device_association"))  # Zwischentabelle zuerst
-    db.query(Link).delete()
-    db.query(Ring).delete()
-    db.query(Device).delete()
-    db.commit()
-
-    print("Importiere Daten aus topology.yml...")
-
-    try:
-        with open("topology.yml", 'r', encoding='utf-8') as f:
-            data = yaml.safe_load(f)
-    except FileNotFoundError:
-        print("WARN: topology.yml nicht gefunden. Überspringe YAML-Seeding.")
-        return
-
-    # 1. Geräte erstellen
-    device_map = {}
-    for device_data in data.get('devices', []):
-        new_device = Device(
-            device_id_str=device_data['id'],
-            type=device_data['type'],
-            status=device_data['status'],
-            properties=device_data.get('properties', {}),
-            coordinates=device_data.get('coordinates')
-        )
-        db.add(new_device)
-        # Wir müssen die Objekte in die DB schreiben, um die IDs zu bekommen.
-        db.flush() 
-        device_map[device_data['id']] = new_device
-    db.commit() # Commit nach dem Erstellen aller Geräte
-
-    # 2. Links erstellen
-    for link_data in data.get('links', []):
-        source_device = device_map.get(link_data['source'])
-        target_device = device_map.get(link_data['target'])
-
-        if not source_device or not target_device:
-            print(f"WARN: Quell- oder Zielgerät für Link '{link_data['id']}' nicht gefunden. Überspringe.")
-            continue
-            
-        new_link = Link(
-            link_id_str=link_data['id'],
-            source_id=source_device.id,
-            target_id=target_device.id,
-            status=link_data['status'],
-            properties=link_data.get('properties', {})
-        )
-        db.add(new_link)
-    db.commit()
-
-    # 3. Ringe erstellen
-    for ring_data in data.get('rings', []):
-        node_devices = [device_map[node_id] for node_id in ring_data['nodes']]
-        new_ring = Ring(
-            ring_id_str=ring_data['id'],
-            name=ring_data['name'],
-            rpl_link_id_str=ring_data['rpl_link_id'],
-            nodes=node_devices
-        )
-        db.add(new_ring)
-    db.commit()
-
-    print("YAML-Seeding erfolgreich abgeschlossen.")
+from database import SessionLocal, init_db, Device, Link
 
 def seed_from_geojson(db: Session):
     """
@@ -105,9 +28,8 @@ def seed_from_geojson(db: Session):
         print(f"FATAL: Fehler beim Laden der dg_network_data.json: {e}")
         return
 
-    # Schritt 1: Alle Knoten (Points) erstellen
     new_devices_count = 0
-    print("Erstelle Device-Knoten (Core Nodes, POPs, Städte)...")
+    print("Erstelle Device-Knoten aus GeoJSON (Core Nodes, POPs, Städte)...")
     for collection in feature_collections:
         for feature in collection['features']:
             if feature['geometry']['type'] == 'Point':
@@ -116,6 +38,7 @@ def seed_from_geojson(db: Session):
                 if not node_id: continue
 
                 if db.query(Device).filter(Device.device_id_str == node_id).count() == 0:
+                    props['data_source'] = 'geojson'  # WICHTIGE MARKIERUNG
                     new_device = Device(
                         device_id_str=node_id,
                         type=props.get('typ', 'Unknown'),
@@ -126,12 +49,11 @@ def seed_from_geojson(db: Session):
                     new_devices_count += 1
     
     db.commit()
-    print(f"{new_devices_count} neue Device-Knoten hinzugefügt.")
+    print(f"{new_devices_count} neue Device-Knoten aus GeoJSON hinzugefügt.")
 
-    # Schritt 2: Alle Verbindungen (LineStrings) erstellen
     all_devices_map = {d.device_id_str: d for d in db.query(Device).all()}
     links_added_count = 0
-    print("Erstelle Links (Backbone, Regional)...")
+    print("Erstelle Links aus GeoJSON (Backbone, Regional)...")
     for collection in feature_collections:
         for feature in collection['features']:
             if feature['geometry']['type'] == 'LineString':
@@ -146,6 +68,7 @@ def seed_from_geojson(db: Session):
                     if source_dev and target_dev:
                         link_id = f"link-{source_name}-{target_name}".replace(" ", "_")
                         if db.query(Link).filter(Link.link_id_str == link_id).count() == 0:
+                            props['data_source'] = 'geojson'  # WICHTIGE MARKIERUNG
                             new_link = Link(
                                 link_id_str=link_id,
                                 source_id=source_dev.id,
@@ -155,11 +78,69 @@ def seed_from_geojson(db: Session):
                             db.add(new_link)
                             links_added_count += 1
                     else:
-                        print(f"WARN: Source ('{source_name}') oder Target ('{target_name}') für Link nicht gefunden.")
+                        print(f"WARN: Source ('{source_name}') oder Target ('{target_name}') für GeoJSON-Link nicht gefunden.")
     
     db.commit()
-    print(f"{links_added_count} neue Links hinzugefügt.")
+    print(f"{links_added_count} neue Links aus GeoJSON hinzugefügt.")
     print("GeoJSON-Daten erfolgreich verarbeitet.")
+
+def seed_from_rees_topology(db: Session):
+    """Lädt die detaillierte Referenz-Topologie für Rees aus topology_dg_rees.yml."""
+    if db.query(Device).filter(Device.device_id_str == "POP-REES-01").count() > 0:
+        print("Rees-Topologie scheint bereits vorhanden zu sein. Überspringe.")
+        return
+
+    print("Seeding der Rees-Referenz-Topologie...")
+    try:
+        with open("topology_dg_rees.yml", 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+    except FileNotFoundError:
+        print("WARN: topology_dg_rees.yml nicht gefunden. Überspringe dieses Seeding.")
+        return
+        
+    device_map = {}
+    print("Erstelle Geräte für Rees-Topologie...")
+    for device_data in data.get('devices', []):
+        props = device_data.get('properties', {})
+        props['data_source'] = 'rees_topology'  # WICHTIGE MARKIERUNG
+        new_device = Device(
+            device_id_str=device_data['id'],
+            type=device_data['type'],
+            status=device_data.get('status', 'online'),
+            properties=props,
+            coordinates=device_data.get('coordinates')
+        )
+        db.add(new_device)
+        db.flush() 
+        device_map[device_data['id']] = new_device
+    db.commit()
+    print(f"{len(device_map)} Geräte für Rees-Topologie hinzugefügt.")
+
+    print("Erstelle Links für Rees-Topologie...")
+    links_added_count = 0
+    for link_data in data.get('links', []):
+        source_dev = device_map.get(link_data['source'])
+        target_dev = device_map.get(link_data['target'])
+        
+        if source_dev and target_dev:
+            props = link_data.get('properties', {})
+            props['data_source'] = 'rees_topology'  # WICHTIGE MARKIERUNG
+            new_link = Link(
+                link_id_str=link_data['id'],
+                source_id=source_dev.id,
+                target_id=target_dev.id,
+                status=link_data.get('status', 'up'),
+                properties=props
+            )
+            db.add(new_link)
+            links_added_count += 1
+        else:
+            print(f"WARN: Source ('{link_data['source']}') oder Target ('{link_data['target']}') für Rees-Link nicht gefunden.")
+
+    db.commit()
+    print(f"{links_added_count} Links für Rees-Topologie hinzugefügt.")
+    print("Rees-Referenz-Topologie erfolgreich geladen.")
+
 
 if __name__ == "__main__":
     print("Initialisiere Datenbank-Schema...")
@@ -167,7 +148,9 @@ if __name__ == "__main__":
     
     db_session = SessionLocal()
     try:
-        seed_from_yaml(db_session)
         seed_from_geojson(db_session)
+        seed_from_rees_topology(db_session)
     finally:
         db_session.close()
+    
+    print("\nSeeding-Prozess abgeschlossen.")
