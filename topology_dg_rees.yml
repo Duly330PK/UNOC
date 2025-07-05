@@ -3,6 +3,7 @@
 #
 # Detaillierte Referenz-Topologie für das Ausbaugebiet Rees (Kreis Kleve).
 # Dient als Grundlage für die Simulation der Netzebene 3 und 4.
+# JETZT: Erweitert um eine hybride AON/PtP-Architektur (Phase 4).
 #
 
 version: "1.0.0"
@@ -60,8 +61,25 @@ devices:
       technology: "GPON"
       sensitivity_min_dbm: -30.0
 
+  # --- NEUE GERÄTE FÜR PHASE 4 (AON/PtP) ---
+  - id: AON-SWITCH-REES-01
+    type: AON Switch
+    status: online
+    properties:
+      model: "Generic Active Ethernet Switch"
+      # Wichtig: AON-Switches haben auch eine Sendeleistung pro Port
+      transmit_power_dbm: 4.0 
+
+  - id: NT-BUSINESS-MUSTER-2
+    type: Business NT # Neuer Typ für den Netzabschluss beim Geschäftskunden
+    status: online
+    properties:
+      address: "Gewerbestraße 5, 46459 Rees"
+      model: "Cisco Catalyst 1000"
+      sensitivity_min_dbm: -30.0 # Business-Geräte haben auch eine Empfindlichkeit
+
 links:
-  # HINZUGEFÜGT: Verbindung vom POP zum ODF, um die Hierarchie zu schließen
+  # --- BESTEHENDE PON-LINKS ---
   - id: link-pop-odf-rees
     source: POP-REES-01
     target: ODF-REES-01
@@ -70,8 +88,9 @@ links:
       type: "PoP Internal"
       length_km: 0.005
       connector_count: 2
+      # Standardmäßig PON, da keine spezielle Technologie angegeben
+      link_technology: "PON"
 
-  # Verbindung innerhalb des PoP
   - id: link-olt-odf-rees
     source: OLT-REES-01
     target: ODF-REES-01
@@ -80,8 +99,8 @@ links:
       type: "Patchkabel"
       length_km: 0.01
       connector_count: 2
+      link_technology: "PON"
 
-  # Feeder-Kabel vom PoP zum Netzverteiler
   - id: link-odf-nvt-rees
     source: ODF-REES-01
     target: NVT-REES-ZENTRUM
@@ -91,8 +110,8 @@ links:
       length_km: 1.2
       splice_count: 1
       connector_count: 2
+      link_technology: "PON"
 
-  # Verbindung innerhalb des NVt (zum Splitter)
   - id: link-nvt-splitter-rees
     source: NVT-REES-ZENTRUM
     target: SPLITTER-REES-ZENTRUM-01
@@ -101,8 +120,8 @@ links:
       type: "Patchkabel"
       length_km: 0.005
       connector_count: 2
+      link_technology: "PON"
 
-  # Verteilkabel vom Splitter zum Haus
   - id: link-splitter-hup-rees
     source: SPLITTER-REES-ZENTRUM-01
     target: HUP-MUSTERA-1
@@ -112,8 +131,8 @@ links:
       length_km: 0.35
       splice_count: 1
       connector_count: 2
+      link_technology: "PON"
 
-  # Inhouse-Verkabelung vom HÜP zum ONT
   - id: link-hup-ont-rees
     source: HUP-MUSTERA-1
     target: ONT-MUSTERA-1
@@ -122,3 +141,29 @@ links:
       type: "Inhouse-Kabel"
       length_km: 0.02
       connector_count: 2
+      link_technology: "PON"
+
+  # --- NEUE LINKS FÜR PHASE 4 (AON/PtP) ---
+  - id: link-odf-aon-switch-rees
+    source: ODF-REES-01
+    target: AON-SWITCH-REES-01
+    status: up
+    properties:
+      type: "Patchkabel"
+      length_km: 0.01
+      connector_count: 2
+      # Dieser Link führt zu einem AON-Gerät
+      link_technology: "PtP" 
+      
+  - id: link-aon-nt-business-rees
+    source: AON-SWITCH-REES-01
+    target: NT-BUSINESS-MUSTER-2
+    status: up
+    properties:
+      type: "PtP-DEDICATED"
+      # Der Schlüssel zur Erkennung der Architektur
+      link_technology: "PtP"
+      length_km: 1.5
+      splice_count: 1
+      connector_count: 2
+      guaranteed_bandwidth_gbps: 1.0

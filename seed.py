@@ -3,6 +3,7 @@
 #
 # Lädt die deutschlandweite GeoJSON-Struktur und anschließend die
 # detaillierte Referenz-Topologie für Rees und markiert die Datenquellen.
+# JETZT: Aktualisiert für idempotentes Seeding (fügt nur hinzu, was fehlt).
 #
 
 import yaml
@@ -13,14 +14,9 @@ from database import SessionLocal, init_db, Device, Link
 def seed_from_geojson(db: Session):
     """
     Lädt die deutschlandweiten Geodaten (POPs, Backbone etc.) aus einer JSON-Datei
-    und fügt sie zur bestehenden Datenbank hinzu.
+    und fügt sie zur bestehenden Datenbank hinzu, falls sie noch nicht existieren.
     """
     print("Prüfe GeoJSON-Daten für Seeding...")
-    if db.query(Device).filter(Device.device_id_str == "POP Frankfurt").count() > 0:
-        print("GeoJSON-Daten scheinen bereits vorhanden zu sein. Überspringe.")
-        return
-
-    print("Lade GeoJSON-Daten aus dg_network_data.json...")
     try:
         with open("dg_network_data.json", 'r', encoding='utf-8') as f:
             feature_collections = json.load(f)
@@ -28,8 +24,8 @@ def seed_from_geojson(db: Session):
         print(f"FATAL: Fehler beim Laden der dg_network_data.json: {e}")
         return
 
+    print("Verarbeite Device-Knoten aus GeoJSON...")
     new_devices_count = 0
-    print("Erstelle Device-Knoten aus GeoJSON (Core Nodes, POPs, Städte)...")
     for collection in feature_collections:
         for feature in collection['features']:
             if feature['geometry']['type'] == 'Point':
@@ -37,8 +33,9 @@ def seed_from_geojson(db: Session):
                 node_id = props.get('name')
                 if not node_id: continue
 
+                # IDEMPOTENZ-PRÜFUNG: Nur hinzufügen, wenn noch nicht vorhanden
                 if db.query(Device).filter(Device.device_id_str == node_id).count() == 0:
-                    props['data_source'] = 'geojson'  # WICHTIGE MARKIERUNG
+                    props['data_source'] = 'geojson'
                     new_device = Device(
                         device_id_str=node_id,
                         type=props.get('typ', 'Unknown'),
@@ -48,12 +45,16 @@ def seed_from_geojson(db: Session):
                     db.add(new_device)
                     new_devices_count += 1
     
-    db.commit()
-    print(f"{new_devices_count} neue Device-Knoten aus GeoJSON hinzugefügt.")
+    if new_devices_count > 0:
+        db.commit()
+        print(f"{new_devices_count} neue Device-Knoten aus GeoJSON hinzugefügt.")
+    else:
+        print("Keine neuen GeoJSON-Geräte hinzuzufügen.")
 
     all_devices_map = {d.device_id_str: d for d in db.query(Device).all()}
-    links_added_count = 0
-    print("Erstelle Links aus GeoJSON (Backbone, Regional)...")
+    
+    print("Verarbeite Links aus GeoJSON...")
+    new_links_count = 0
     for collection in feature_collections:
         for feature in collection['features']:
             if feature['geometry']['type'] == 'LineString':
@@ -67,8 +68,10 @@ def seed_from_geojson(db: Session):
 
                     if source_dev and target_dev:
                         link_id = f"link-{source_name}-{target_name}".replace(" ", "_")
+                        
+                        # IDEMPOTENZ-PRÜFUNG: Nur hinzufügen, wenn noch nicht vorhanden
                         if db.query(Link).filter(Link.link_id_str == link_id).count() == 0:
-                            props['data_source'] = 'geojson'  # WICHTIGE MARKIERUNG
+                            props['data_source'] = 'geojson'
                             new_link = Link(
                                 link_id_str=link_id,
                                 source_id=source_dev.id,
@@ -76,21 +79,21 @@ def seed_from_geojson(db: Session):
                                 properties=props
                             )
                             db.add(new_link)
-                            links_added_count += 1
+                            new_links_count += 1
                     else:
                         print(f"WARN: Source ('{source_name}') oder Target ('{target_name}') für GeoJSON-Link nicht gefunden.")
     
-    db.commit()
-    print(f"{links_added_count} neue Links aus GeoJSON hinzugefügt.")
+    if new_links_count > 0:
+        db.commit()
+        print(f"{new_links_count} neue Links aus GeoJSON hinzugefügt.")
+    else:
+        print("Keine neuen GeoJSON-Links hinzuzufügen.")
     print("GeoJSON-Daten erfolgreich verarbeitet.")
+
 
 def seed_from_rees_topology(db: Session):
     """Lädt die detaillierte Referenz-Topologie für Rees aus topology_dg_rees.yml."""
-    if db.query(Device).filter(Device.device_id_str == "POP-REES-01").count() > 0:
-        print("Rees-Topologie scheint bereits vorhanden zu sein. Überspringe.")
-        return
-
-    print("Seeding der Rees-Referenz-Topologie...")
+    print("Prüfe Rees-Topologie für Seeding...")
     try:
         with open("topology_dg_rees.yml", 'r', encoding='utf-8') as f:
             data = yaml.safe_load(f)
@@ -98,48 +101,61 @@ def seed_from_rees_topology(db: Session):
         print("WARN: topology_dg_rees.yml nicht gefunden. Überspringe dieses Seeding.")
         return
         
-    device_map = {}
-    print("Erstelle Geräte für Rees-Topologie...")
+    print("Verarbeite Geräte für Rees-Topologie...")
+    new_devices_count = 0
     for device_data in data.get('devices', []):
-        props = device_data.get('properties', {})
-        props['data_source'] = 'rees_topology'  # WICHTIGE MARKIERUNG
-        new_device = Device(
-            device_id_str=device_data['id'],
-            type=device_data['type'],
-            status=device_data.get('status', 'online'),
-            properties=props,
-            coordinates=device_data.get('coordinates')
-        )
-        db.add(new_device)
-        db.flush() 
-        device_map[device_data['id']] = new_device
-    db.commit()
-    print(f"{len(device_map)} Geräte für Rees-Topologie hinzugefügt.")
-
-    print("Erstelle Links für Rees-Topologie...")
-    links_added_count = 0
-    for link_data in data.get('links', []):
-        source_dev = device_map.get(link_data['source'])
-        target_dev = device_map.get(link_data['target'])
-        
-        if source_dev and target_dev:
-            props = link_data.get('properties', {})
-            props['data_source'] = 'rees_topology'  # WICHTIGE MARKIERUNG
-            new_link = Link(
-                link_id_str=link_data['id'],
-                source_id=source_dev.id,
-                target_id=target_dev.id,
-                status=link_data.get('status', 'up'),
-                properties=props
+        # IDEMPOTENZ-PRÜFUNG für jedes Gerät
+        if db.query(Device).filter(Device.device_id_str == device_data['id']).count() == 0:
+            props = device_data.get('properties', {})
+            props['data_source'] = 'rees_topology'
+            new_device = Device(
+                device_id_str=device_data['id'],
+                type=device_data['type'],
+                status=device_data.get('status', 'online'),
+                properties=props,
+                coordinates=device_data.get('coordinates')
             )
-            db.add(new_link)
-            links_added_count += 1
-        else:
-            print(f"WARN: Source ('{link_data['source']}') oder Target ('{link_data['target']}') für Rees-Link nicht gefunden.")
+            db.add(new_device)
+            new_devices_count += 1
+    
+    if new_devices_count > 0:
+        db.commit()
+        print(f"{new_devices_count} neue Geräte für Rees-Topologie hinzugefügt.")
+    else:
+        print("Keine neuen Geräte für Rees-Topologie hinzuzufügen.")
 
-    db.commit()
-    print(f"{links_added_count} Links für Rees-Topologie hinzugefügt.")
-    print("Rees-Referenz-Topologie erfolgreich geladen.")
+    # Holen aller Geräte, um die Links korrekt zu erstellen
+    all_devices_map = {d.device_id_str: d for d in db.query(Device).all()}
+
+    print("Verarbeite Links für Rees-Topologie...")
+    new_links_count = 0
+    for link_data in data.get('links', []):
+        # IDEMPOTENZ-PRÜFUNG für jeden Link
+        if db.query(Link).filter(Link.link_id_str == link_data['id']).count() == 0:
+            source_dev = all_devices_map.get(link_data['source'])
+            target_dev = all_devices_map.get(link_data['target'])
+            
+            if source_dev and target_dev:
+                props = link_data.get('properties', {})
+                props['data_source'] = 'rees_topology'
+                new_link = Link(
+                    link_id_str=link_data['id'],
+                    source_id=source_dev.id,
+                    target_id=target_dev.id,
+                    status=link_data.get('status', 'up'),
+                    properties=props
+                )
+                db.add(new_link)
+                new_links_count += 1
+            else:
+                print(f"WARN: Source ('{link_data['source']}') oder Target ('{link_data['target']}') für Rees-Link '{link_data['id']}' nicht gefunden.")
+
+    if new_links_count > 0:
+        db.commit()
+        print(f"{new_links_count} neue Links für Rees-Topologie hinzugefügt.")
+    else:
+        print("Keine neuen Links für Rees-Topologie hinzuzufügen.")
+    print("Rees-Referenz-Topologie erfolgreich verarbeitet.")
 
 
 if __name__ == "__main__":
@@ -148,6 +164,7 @@ if __name__ == "__main__":
     
     db_session = SessionLocal()
     try:
+        # Führe beide Seeding-Funktionen aus
         seed_from_geojson(db_session)
         seed_from_rees_topology(db_session)
     finally:
